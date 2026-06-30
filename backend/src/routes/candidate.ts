@@ -18,6 +18,37 @@ function checkRateLimit(token: string): boolean {
   return true
 }
 
+// GET /candidate/sessions/:token
+// Returns session details so the candidate UI can greet by name and validate before selfie.
+router.get('/sessions/:token', async (req: Request, res: Response) => {
+  const { token } = req.params
+
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) {
+    res.status(400).json({ error: 'Invalid token format' })
+    return
+  }
+
+  const session = await supabaseService.getSession(token)
+
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' })
+    return
+  }
+
+  const isExpired = new Date(session.expires_at) <= new Date()
+  const isFinished = session.status === 'completed' || session.status === 'cancelled'
+
+  if (isExpired || isFinished) {
+    res.status(410).json({ error: 'Session expired or already completed' })
+    return
+  }
+
+  res.json({
+    candidateName: session.candidate_name,
+    role: session.question_set.role,
+  })
+})
+
 // PATCH /candidate/sessions/:token/descriptor
 // No authMiddleware — candidate identifies via invite token only.
 router.patch('/sessions/:token/descriptor', async (req: Request, res: Response) => {
