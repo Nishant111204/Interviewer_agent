@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head><title>WS Audio Test</title></head>
+<body>
+<button id="start">Start</button>
+<button id="stop" disabled>Stop</button>
+<pre id="log" style="background:#111;color:#0f0;padding:1em;height:400px;overflow-y:auto;font-size:13px"></pre>
+<script>
+const TOKEN = 'a'.repeat(64)  // dummy token — accepted by stub DB
+let ws
+
+function log(msg) {
+  const el = document.getElementById('log')
+  el.textContent += msg + '\n'
+  el.scrollTop = el.scrollHeight
+}
+
+document.getElementById('start').onclick = async () => {
+  document.getElementById('start').disabled = true
+  document.getElementById('stop').disabled = false
+  log('Connecting to ws://localhost:3001/interview/' + TOKEN.slice(0, 8) + '...')
+  ws = new WebSocket(`ws://localhost:3001/interview/${TOKEN}`)
+  ws.onopen = () => log('[open] Connected to interview relay')
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data)
+    if (msg.type === 'audio') {
+      log('[audio] Received audio chunk, length=' + msg.data.length)
+    } else if (msg.type === 'transcript') {
+      log(`[transcript] ${msg.role}: ${msg.text}`)
+    } else {
+      log('[msg] ' + JSON.stringify(msg).slice(0, 120))
+    }
+  }
+  ws.onerror = (e) => log('[error] ' + (e.message ?? 'WebSocket error'))
+  ws.onclose = (e) => {
+    log(`[close] code=${e.code} reason=${e.reason}`)
+    document.getElementById('start').disabled = false
+    document.getElementById('stop').disabled = true
+  }
+}
+
+document.getElementById('stop').onclick = () => {
+  ws?.close()
+}
+</script>
+</body>
+</html>
