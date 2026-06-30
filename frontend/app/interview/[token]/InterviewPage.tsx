@@ -33,7 +33,7 @@ export function InterviewPage({ token }: InterviewPageProps) {
 
   // Fetch session details on mount — validates token before showing selfie screen
   useEffect(() => {
-    const REST_BASE = WS_URL.replace(/^ws/, 'http')
+    const REST_BASE = WS_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
     fetch(`${REST_BASE}/candidate/sessions/${token}`)
       .then(res => {
         if (res.status === 404) throw new Error('Session not found')

@@ -28,7 +28,13 @@ router.get('/sessions/:token', async (req: Request, res: Response) => {
     return
   }
 
-  const session = await supabaseService.getSession(token)
+  let session: Awaited<ReturnType<typeof supabaseService.getSession>>
+  try {
+    session = await supabaseService.getSession(token)
+  } catch {
+    res.status(500).json({ error: 'Internal error' })
+    return
+  }
 
   if (!session) {
     res.status(404).json({ error: 'Session not found' })
