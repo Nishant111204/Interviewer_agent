@@ -1,0 +1,137 @@
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import crypto from 'crypto'
+import type { QuestionSet } from '../agents/interviewer'
+
+// Lazy-initialised so the server boots even when SUPABASE_URL is not yet set.
+let _supabase: SupabaseClient | null = null
+function getClient(): SupabaseClient {
+  if (!_supabase) {
+    const url = process.env.SUPABASE_URL
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!url || !key) {
+      throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set')
+    }
+    _supabase = createClient(url, key)
+  }
+  return _supabase
+}
+
+const FLAG_SEVERITY: Record<string, 'low' | 'medium' | 'high'> = {
+  tab_switch: 'medium',
+  window_blur: 'low',
+  face_absent: 'medium',
+  face_multiple: 'high',
+  gaze_away: 'low',
+  copy_attempt: 'high',
+  paste_attempt: 'high',
+  fullscreen_exit: 'medium',
+  right_click: 'low',
+  keyboard_shortcut: 'low',
+}
+
+export const supabaseService = {
+  async getSession(token: string) {
+    const { data, error } = await getClient()
+      .from('sessions')
+      .select('*, question_sets(*)')
+      .eq('token', token)
+      .single()
+    if (error || !data) return null
+    return {
+      id: data.id as string,
+      status: data.status as string,
+      expires_at: data.expires_at as string,
+      candidate_name: data.candidate_name as string,
+      question_set: data.question_sets as unknown as QuestionSet,
+    }
+  },
+
+  async markSessionStarted(sessionId: string) {
+    await getClient()
+      .from('sessions')
+      .update({ status: 'in_progress', started_at: new Date().toISOString() })
+      .eq('id', sessionId)
+  },
+
+  async saveScore(sessionId: string, questionId: string, score: number, notes: string) {
+    await getClient()
+      .from('transcript_turns')
+      .update({ score, question_id: questionId })
+      .eq('session_id', sessionId)
+      .eq('role', 'candidate')
+      .is('question_id', null)
+      .order('ts', { ascending: false })
+      .limit(1)
+
+    // Also insert a notes record
+    await getClient().from('transcript_turns').insert({
+      session_id: sessionId,
+      role: 'model',
+      text: `[Score: ${score}/10] ${notes}`,
+      question_id: questionId,
+      score,
+    })
+  },
+
+  async saveTranscriptTurn(sessionId: string, role: string, text: string) {
+    await getClient().from('transcript_turns').insert({ session_id: sessionId, role, text })
+  },
+
+  async saveFlag(sessionId: string, flag: { type: string; ts: string; [k: string]: unknown }) {
+    await getClient().from('proctoring_flags').insert({
+      session_id: sessionId,
+      flag_type: flag.type,
+      severity: FLAG_SEVERITY[flag.type] ?? 'low',
+      detail: flag,
+      ts: flag.ts,
+    })
+  },
+
+  async finalizeSession(sessionId: string, recommendation: string, _summary: string) {
+    await getClient()
+      .from('sessions')
+      .update({
+        status: 'completed',
+        ended_at: new Date().toISOString(),
+        recommendation,
+      })
+      .eq('id', sessionId)
+  },
+
+  async createSession(params: {
+    org_id: string
+    created_by: string
+    candidate_name: string
+    candidate_email: string
+    job_title: string
+    question_set_id: string
+  }) {
+    const token = crypto.randomBytes(32).toString('hex')
+    const { data, error } = await getClient()
+      .from('sessions')
+      .insert({ ...params, token })
+      .select()
+      .single()
+    if (error) throw error
+    return data as { id: string; token: string }
+  },
+
+  async listSessions(orgId: string) {
+    const { data, error } = await getClient()
+      .from('sessions')
+      .select('id, candidate_name, candidate_email, job_title, status, suspicion_score, recommendation, overall_score, created_at, started_at, ended_at')
+      .eq('org_id', orgId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return data ?? []
+  },
+
+  async getSessionDetail(sessionId: string) {
+    const [{ data: session }, { data: turns }, { data: flags }] = await Promise.all([
+      getClient().from('sessions').select('*').eq('id', sessionId).single(),
+      getClient().from('transcript_turns').select('*').eq('session_id', sessionId).order('ts'),
+      getClient().from('proctoring_flags').select('*').eq('session_id', sessionId).order('ts'),
+    ])
+    return { session, turns: turns ?? [], flags: flags ?? [] }
+  },
+}

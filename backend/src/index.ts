@@ -4,6 +4,7 @@ import { createServer } from 'http'
 import { WebSocketServer } from 'ws'
 import { URL } from 'url'
 import { handleInterviewSocket } from './websocket/interviewRelay'
+import sessionsRouter from './routes/sessions'
 
 const app = express()
 app.use(express.json())
@@ -11,8 +12,8 @@ app.use(express.json())
 // Health check
 app.get('/health', (_req, res) => res.json({ ok: true }))
 
-// REST routes (stubbed, full impl in Task 3)
-app.use('/api/sessions', (_req, res) => res.status(501).json({ error: 'not implemented' }))
+// REST routes
+app.use('/api/sessions', sessionsRouter)
 
 const server = createServer(app)
 const wss = new WebSocketServer({ noServer: true })

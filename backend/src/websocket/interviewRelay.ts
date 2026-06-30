@@ -22,8 +22,9 @@ import {
   type Session,
   type FunctionDeclaration,
 } from '@google/genai'
-import { createInterviewerAgent, frontendQuestionSet, type QuestionSet } from '../agents/interviewer'
+import { createInterviewerAgent, type QuestionSet } from '../agents/interviewer'
 import { FunctionTool, LlmAgent } from '@google/adk'
+import { supabaseService } from '../services/supabase'
 
 // ---------------------------------------------------------------------------
 // Stub DB — replace with real supabaseService in Task 3
@@ -50,34 +51,6 @@ interface StubSession {
   expires_at: string
   candidate_name: string
   question_set: QuestionSet
-}
-
-const stubDb: StubDB = {
-  async getSession(_token: string) {
-    // Returns a valid stub session — real lookup comes in Task 3.
-    return {
-      id: 'test-session-id',
-      status: 'pending',
-      expires_at: new Date(Date.now() + 48 * 3600 * 1000).toISOString(),
-      candidate_name: 'Test Candidate',
-      question_set: frontendQuestionSet,
-    }
-  },
-  async saveScore(sessionId, questionId, score, notes) {
-    console.log('[DB stub] saveScore', { sessionId, questionId, score, notes })
-  },
-  async finalizeSession(sessionId, recommendation, summary) {
-    console.log('[DB stub] finalizeSession', { sessionId, recommendation, summary })
-  },
-  async saveFlag(sessionId, flag) {
-    console.log('[DB stub] saveFlag', { sessionId, flag })
-  },
-  async saveTranscriptTurn(sessionId, role, text) {
-    console.log('[DB stub] saveTranscriptTurn', { sessionId, role, text })
-  },
-  async markSessionStarted(sessionId) {
-    console.log('[DB stub] markSessionStarted', sessionId)
-  },
 }
 
 // ---------------------------------------------------------------------------
@@ -135,8 +108,10 @@ async function buildToolDeclarations(agent: LlmAgent): Promise<FunctionDeclarati
 // ---------------------------------------------------------------------------
 
 export async function handleInterviewSocket(ws: WebSocket, token: string) {
+  const db = supabaseService
+
   // --- GUARD: validate session upfront ---
-  const session = await stubDb.getSession(token)
+  const session = await db.getSession(token)
   if (!session) {
     ws.close(4001, 'Session not found')
     return
@@ -150,14 +125,14 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
     return
   }
 
-  await stubDb.markSessionStarted(session.id)
+  await db.markSessionStarted(session.id)
   console.log(`[WS] Interview started: session=${session.id}`)
 
   // --- Build ADK agent to extract instruction + tool declarations ---
   const agent = createInterviewerAgent(
     session.question_set,
     session.id,
-    stubDb,
+    db,
     session.candidate_name,
   )
 
@@ -197,7 +172,7 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
         console.log('[WS] Gemini Live connected, session=', session.id)
       },
       onmessage: (msg: LiveServerMessage) => {
-        handleGeminiMessage(msg, ws, session.id, stubDb, liveSession).catch((err) =>
+        handleGeminiMessage(msg, ws, session.id, db, liveSession).catch((err) =>
           console.error('[WS] Error handling Gemini message:', err),
         )
       },
@@ -241,7 +216,7 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
 
     if (msg.type === 'flag') {
       if (msg.event) {
-        await stubDb.saveFlag(session.id, msg.event)
+        await db.saveFlag(session.id, msg.event)
       }
       return
     }
