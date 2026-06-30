@@ -117,9 +117,17 @@ type ToolWithDeclaration = FunctionTool & {
 async function buildToolDeclarations(agent: LlmAgent): Promise<FunctionDeclaration[]> {
   // canonicalTools() is an async method returning BaseTool[]
   const tools = await agent.canonicalTools()
-  return tools
-    .filter((t): t is ToolWithDeclaration => t instanceof FunctionTool && '_getDeclaration' in t)
-    .map((t) => t._getDeclaration())
+  const declarations: FunctionDeclaration[] = []
+  for (const t of tools) {
+    if (!(t instanceof FunctionTool) || !('_getDeclaration' in t)) continue
+    try {
+      const decl = (t as ToolWithDeclaration)._getDeclaration()
+      if (decl) declarations.push(decl)
+    } catch (err) {
+      console.error(`[ADK] Failed to get declaration for tool ${t.name}:`, err)
+    }
+  }
+  return declarations
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +340,7 @@ async function handleGeminiMessage(
   // Output transcription (model speech transcribed)
   if (content?.outputTranscription?.text) {
     const text = content.outputTranscription.text
+    db.saveTranscriptTurn(sessionId, 'model', text)
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'transcript', role: 'model', text }))
     }
