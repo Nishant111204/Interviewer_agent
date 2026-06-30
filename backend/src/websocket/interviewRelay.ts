@@ -9,6 +9,7 @@ import {
 } from '@google/genai'
 import { buildSystemPrompt, interviewerTools, executeTool } from '../agents/interviewer'
 import { supabaseService } from '../services/supabase'
+import { generateReport } from '../services/report'
 
 interface ProctoringFlag {
   type: string
@@ -107,6 +108,9 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
   ws.on('close', () => {
     console.log(`[WS] Browser disconnected: session=${session.id}`)
     if (!sessionClosed) liveSession?.close()
+    generateReport(session.id).catch(err =>
+      console.error('[Report] Failed to generate:', err),
+    )
   })
 
   ws.on('error', (err) => {
