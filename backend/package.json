@@ -14,9 +14,13 @@
     "@modelcontextprotocol/sdk": "^1.17.5",
     "@opentelemetry/api": "^1.9.0",
     "@supabase/supabase-js": "^2.39.0",
+    "@types/cors": "^2.8.19",
+    "cors": "^2.8.6",
     "dotenv": "^16.0.0",
     "express": "^4.18.0",
     "jsonwebtoken": "^9.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "resend": "^3.2.0",
     "ws": "^8.16.0",
     "zod": "^3.25.76"

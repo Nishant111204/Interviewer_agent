@@ -2,7 +2,7 @@ import { Resend } from 'resend'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 const BASE_URL = process.env.FRONTEND_URL ?? 'http://localhost:3000'
-const FROM = 'InterviewAI <interviews@wohlig.com>'
+const FROM = 'InterviewAI <onboarding@resend.dev>'
 
 export const emailService = {
   async sendInvite({

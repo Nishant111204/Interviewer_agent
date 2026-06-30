@@ -2,5 +2,17 @@
 node_modules/
 dist/
 .env
+.env.local
+.env*.local
 *.log
 tsconfig.tsbuildinfo
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Model weights (large binary files — download separately)
+frontend/public/weights/
+
+# OS
+.DS_Store

@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express'
-import jwt from 'jsonwebtoken'
 import { supabaseService } from '../services/supabase'
 
 export interface AuthRequest extends Request {
@@ -13,22 +12,23 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
     res.status(401).json({ error: 'Missing authorization header' })
     return
   }
-  let payload: { sub: string }
-  try {
-    payload = jwt.verify(header.slice(7), process.env.SUPABASE_JWT_SECRET!) as { sub: string }
-  } catch {
-    res.status(401).json({ error: 'Invalid token' })
-    return
-  }
-  supabaseService.getHrUser(payload.sub)
-    .then(hrUser => {
-      if (!hrUser) {
-        res.status(403).json({ error: 'Not an HR user' })
+  const token = header.slice(7)
+
+  supabaseService.verifyToken(token)
+    .then(user => {
+      if (!user) {
+        res.status(401).json({ error: 'Invalid token' })
         return
       }
-      req.hrUserId = payload.sub
-      req.orgId = hrUser.org_id
-      next()
+      return supabaseService.getHrUser(user.id).then(hrUser => {
+        if (!hrUser) {
+          res.status(403).json({ error: 'Not an HR user' })
+          return
+        }
+        req.hrUserId = user.id
+        req.orgId = hrUser.org_id
+        next()
+      })
     })
     .catch(() => {
       res.status(500).json({ error: 'Auth check failed' })

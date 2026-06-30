@@ -11,7 +11,9 @@ function getClient(): SupabaseClient {
     if (!url || !key) {
       throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set')
     }
-    _supabase = createClient(url, key)
+    _supabase = createClient(url, key, {
+      realtime: { transport: require('ws') },
+    })
   }
   return _supabase
 }
@@ -193,5 +195,11 @@ export const supabaseService = {
       .select('id, role')
     if (error) throw error
     return (data ?? []) as Array<{ id: string; role: string }>
+  },
+
+  async verifyToken(token: string): Promise<{ id: string } | null> {
+    const { data: { user }, error } = await getClient().auth.getUser(token)
+    if (error || !user) return null
+    return { id: user.id }
   },
 }

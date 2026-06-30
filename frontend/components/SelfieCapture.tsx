@@ -22,15 +22,17 @@ export default function SelfieCapture({ sessionToken, onCapture }: SelfieCapture
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
-  // Load models + open camera on mount
+  // Open camera first (triggers permission prompt), load models in parallel
   useEffect(() => {
     let cancelled = false
 
     async function init() {
       try {
-        await initFaceApi()
-        if (cancelled) return
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        // Start both concurrently so permission prompt shows immediately
+        const [stream] = await Promise.all([
+          navigator.mediaDevices.getUserMedia({ video: true, audio: false }),
+          initFaceApi(),
+        ])
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
         streamRef.current = stream
         if (videoRef.current) {

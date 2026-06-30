@@ -37,10 +37,11 @@ create table if not exists sessions (
   started_at timestamptz,
   ended_at timestamptz,
   suspicion_score integer default 0,
+  face_descriptor float8[],
   recommendation text,
   overall_score numeric,
   created_at timestamptz default now(),
-  expires_at timestamptz generated always as (created_at + interval '48 hours') stored
+  expires_at timestamptz default (now() + interval '48 hours')
 );
 
 -- Transcript turns

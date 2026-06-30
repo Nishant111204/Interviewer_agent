@@ -49,7 +49,7 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
   const pendingMessages: BrowserMessage[] = []
 
   const connectPromise = ai.live.connect({
-    model: 'gemini-live-2.5-flash',
+    model: 'gemini-2.0-flash-exp',
     config: {
       responseModalities: [Modality.AUDIO],
       systemInstruction: {
@@ -80,10 +80,19 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
   connectPromise
     .then((ls) => {
       liveSession = ls
+      console.log('[WS] Sending initial greeting trigger, session=', session.id)
+      // Kick off the greeting — Gemini Live waits for input before speaking
+      try {
+        ls.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text: 'Hello, I am ready to begin.' }] }],
+          turnComplete: true,
+        })
+      } catch (err) {
+        console.error('[WS] Failed to send greeting trigger:', err)
+      }
+
       for (const msg of pendingMessages) {
-        dispatchToGemini(msg, liveSession!).catch((err) =>
-          console.error('[WS] Drain error:', err),
-        )
+        dispatchToGemini(msg, liveSession!)
       }
       pendingMessages.length = 0
     })
@@ -102,7 +111,7 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
     }
 
     if (!liveSession) { pendingMessages.push(msg); return }
-    await dispatchToGemini(msg, liveSession)
+    dispatchToGemini(msg, liveSession)
   })
 
   ws.on('close', () => {
@@ -119,13 +128,13 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
   })
 }
 
-async function dispatchToGemini(msg: BrowserMessage, liveSession: Session) {
+function dispatchToGemini(msg: BrowserMessage, liveSession: Session) {
   switch (msg.type) {
     case 'audio':
-      if (msg.data) await liveSession.sendRealtimeInput({ audio: { data: msg.data, mimeType: 'audio/pcm;rate=16000' } })
+      if (msg.data) liveSession.sendRealtimeInput({ audio: { data: msg.data, mimeType: 'audio/pcm;rate=16000' } })
       break
     case 'video':
-      if (msg.data) await liveSession.sendRealtimeInput({ video: { data: msg.data, mimeType: 'image/jpeg' } })
+      if (msg.data) liveSession.sendRealtimeInput({ video: { data: msg.data, mimeType: 'image/jpeg' } })
       break
   }
 }

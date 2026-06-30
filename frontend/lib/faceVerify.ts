@@ -1,6 +1,6 @@
 import * as faceapi from 'face-api.js'
 
-const MODEL_URL = 'https://unpkg.com/face-api.js@0.22.2/weights'
+const MODEL_URL = '/weights'
 
 let loaded = false
 let loading: Promise<void> | null = null

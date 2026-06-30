@@ -69,15 +69,23 @@ export default function HrPage() {
     if (!accessToken) return
     const headers: HeadersInit = { Authorization: `Bearer ${accessToken}` }
     Promise.all([
-      fetch(`${REST_BASE}/api/sessions`, { headers }).then(r => r.json()),
-      fetch(`${REST_BASE}/api/question-sets`, { headers }).then(r => r.json()),
+      fetch(`${REST_BASE}/api/sessions`, { headers }).then(async r => {
+        const body = await r.json()
+        if (!r.ok) console.error('[sessions]', r.status, body)
+        return body
+      }),
+      fetch(`${REST_BASE}/api/question-sets`, { headers }).then(async r => {
+        const body = await r.json()
+        if (!r.ok) console.error('[question-sets]', r.status, body)
+        return body
+      }),
     ])
       .then(([sess, qs]) => {
         setSessions(Array.isArray(sess) ? (sess as Session[]) : [])
         setQuestionSets(Array.isArray(qs) ? (qs as QuestionSet[]) : [])
         setLoading(false)
       })
-      .catch(() => setLoading(false))
+      .catch(err => { console.error('[fetch error]', err); setLoading(false) })
   }, [accessToken])
 
   async function handleCreate(e: React.FormEvent) {

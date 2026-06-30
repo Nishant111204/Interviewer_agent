@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import express from 'express'
+import cors from 'cors'
 import { createServer } from 'http'
 import { WebSocketServer } from 'ws'
 import { URL } from 'url'
@@ -9,6 +10,7 @@ import candidateRouter from './routes/candidate'
 import questionSetsRouter from './routes/questionSets'
 
 const app = express()
+app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:3000' }))
 app.use(express.json())
 
 // Health check
