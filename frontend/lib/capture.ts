@@ -29,6 +29,9 @@ export class InterviewCapture {
   private faceRafId: number | null = null
   private gazeAwayStart: number | null = null
 
+  // --- Face verification fields (Task 5) ---
+  private faceVerifyInterval: ReturnType<typeof setInterval> | null = null
+
   constructor(token: string) {
     this.sessionToken = token
   }
@@ -131,6 +134,7 @@ export class InterviewCapture {
     this.stopAudio()
     this.stopVideo()
     this.stopFaceDetection()
+    this.stopFaceVerification()
     this.ws?.close()
     this.ws = null
   }
@@ -212,5 +216,38 @@ export class InterviewCapture {
     if (this.faceRafId) cancelAnimationFrame(this.faceRafId)
     this.faceRafId = null
     this.gazeAwayStart = null
+  }
+
+  // --- Face identity verification (Task 5) ---
+
+  startFaceVerification(
+    ref: Float32Array,
+    videoEl: HTMLVideoElement,
+    onFlag: (event: ProctoringEvent) => void,
+  ): void {
+    if (!ref) {
+      console.warn('[FaceVerify] No reference descriptor — skipping verification')
+      return
+    }
+
+    const runCheck = async () => {
+      const { compareDescriptor } = await import('./faceVerify')
+      const result = await compareDescriptor(ref, videoEl)
+      if (!result.detected) return
+      if (!result.isMatch) {
+        const ts = new Date().toISOString()
+        onFlag({ type: 'impersonation', ts, distance: result.distance })
+        this.sendFlag({ type: 'impersonation', ts, distance: result.distance })
+      }
+    }
+
+    // Immediate first tick, then every 30 s
+    void runCheck()
+    this.faceVerifyInterval = setInterval(() => { void runCheck() }, 30_000)
+  }
+
+  stopFaceVerification(): void {
+    if (this.faceVerifyInterval) clearInterval(this.faceVerifyInterval)
+    this.faceVerifyInterval = null
   }
 }
