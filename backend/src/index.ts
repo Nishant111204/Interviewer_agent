@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws'
 import { URL } from 'url'
 import { handleInterviewSocket } from './websocket/interviewRelay'
 import sessionsRouter from './routes/sessions'
+import candidateRouter from './routes/candidate'
 
 const app = express()
 app.use(express.json())
@@ -12,8 +13,11 @@ app.use(express.json())
 // Health check
 app.get('/health', (_req, res) => res.json({ ok: true }))
 
-// REST routes
+// REST routes — HR (JWT-protected via authMiddleware inside sessionsRouter)
 app.use('/api/sessions', sessionsRouter)
+
+// REST routes — candidate (token-based auth, no JWT)
+app.use('/candidate', candidateRouter)
 
 const server = createServer(app)
 const wss = new WebSocketServer({ noServer: true })

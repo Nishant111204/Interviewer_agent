@@ -27,6 +27,7 @@ const FLAG_SEVERITY: Record<string, 'low' | 'medium' | 'high'> = {
   fullscreen_exit: 'medium',
   right_click: 'low',
   keyboard_shortcut: 'low',
+  impersonation: 'high',
 }
 
 export const supabaseService = {
@@ -151,5 +152,28 @@ export const supabaseService = {
       getClient().from('proctoring_flags').select('*').eq('session_id', sessionId).order('ts'),
     ])
     return { session, turns: turns ?? [], flags: flags ?? [] }
+  },
+
+  async saveFaceDescriptor(token: string, descriptor: number[]): Promise<'ok' | 'not_found' | 'not_pending' | 'already_set' | 'error'> {
+    const { data, error } = await getClient()
+      .from('sessions')
+      .select('id, status, face_descriptor')
+      .eq('token', token)
+      .single()
+
+    if (error || !data) return 'not_found'
+    if (data.status !== 'pending') return 'not_pending'
+    if (data.face_descriptor !== null) return 'already_set'
+
+    const { error: updateError } = await getClient()
+      .from('sessions')
+      .update({ face_descriptor: descriptor })
+      .eq('id', data.id)
+
+    if (updateError) {
+      console.error('[DB] saveFaceDescriptor error:', updateError)
+      return 'error'
+    }
+    return 'ok'
   },
 }
