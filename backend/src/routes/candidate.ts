@@ -46,8 +46,7 @@ router.patch('/sessions/:token/descriptor', async (req: Request, res: Response) 
       res.json({ ok: true })
       break
     case 'already_set':
-      // Idempotent — treat as success
-      res.json({ ok: true })
+      res.status(409).json({ ok: true, alreadySet: true })
       break
     case 'not_found':
       res.status(404).json({ error: 'Session not found' })
