@@ -19,6 +19,7 @@ export class InterviewCapture {
   private workletNode: AudioWorkletNode | null = null
   private onAudioCb: AudioCallback | null = null
   private onTranscriptCb: TranscriptCallback | null = null
+  private onCloseCb: (() => void) | null = null
   private sessionToken: string
 
   // --- Video capture fields (Task 5) ---
@@ -45,6 +46,7 @@ export class InterviewCapture {
       this.ws.onopen = () => resolve()
       this.ws.onerror = (_e) => reject(new Error('WS connection failed'))
       this.ws.onmessage = (e) => this._handleServerMessage(e)
+      this.ws.onclose = () => { this.onCloseCb?.() }
     })
   }
 
@@ -62,6 +64,7 @@ export class InterviewCapture {
 
   onAudio(cb: AudioCallback) { this.onAudioCb = cb }
   onTranscript(cb: TranscriptCallback) { this.onTranscriptCb = cb }
+  onClose(cb: () => void) { this.onCloseCb = cb }
 
   // --- Mic capture ---
 
@@ -131,6 +134,7 @@ export class InterviewCapture {
   // --- Cleanup ---
 
   disconnect() {
+    this.onCloseCb = null
     this.stopAudio()
     this.stopVideo()
     this.stopFaceDetection()
