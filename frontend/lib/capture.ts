@@ -21,6 +21,14 @@ export class InterviewCapture {
   private onTranscriptCb: TranscriptCallback | null = null
   private sessionToken: string
 
+  // --- Video capture fields (Task 5) ---
+  private videoStream: MediaStream | null = null
+  private videoInterval: ReturnType<typeof setInterval> | null = null
+
+  // --- Face detection fields (Task 5) ---
+  private faceRafId: number | null = null
+  private gazeAwayStart: number | null = null
+
   constructor(token: string) {
     this.sessionToken = token
   }
@@ -121,17 +129,88 @@ export class InterviewCapture {
 
   disconnect() {
     this.stopAudio()
+    this.stopVideo()
+    this.stopFaceDetection()
     this.ws?.close()
     this.ws = null
   }
 
   // --- Video capture (Task 5) ---
-  // startVideo(): Promise<void> { ... }
-  // stopVideo(): void { ... }
 
-  // --- Face detection / proctoring (Task 6) ---
-  // startFaceDetection(): Promise<void> { ... }
-  // stopFaceDetection(): void { ... }
-  // startProctoring(): void { ... }
-  // stopProctoring(): void { ... }
+  async startVideo(videoEl: HTMLVideoElement): Promise<void> {
+    this.videoStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+      audio: false,
+    })
+    videoEl.srcObject = this.videoStream
+    await videoEl.play()
+
+    // Capture and send one JPEG frame per second
+    const canvas = document.createElement('canvas')
+    canvas.width = 320
+    canvas.height = 240
+    const ctx2d = canvas.getContext('2d')!
+    this.videoInterval = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+      ctx2d.drawImage(videoEl, 0, 0, 320, 240)
+      const jpeg = canvas.toDataURL('image/jpeg', 0.7).split(',')[1]
+      this.ws.send(JSON.stringify({ type: 'video', data: jpeg }))
+    }, 1000)
+  }
+
+  stopVideo(): void {
+    if (this.videoInterval) clearInterval(this.videoInterval)
+    this.videoStream?.getTracks().forEach((t) => t.stop())
+    this.videoInterval = null
+    this.videoStream = null
+  }
+
+  // --- Face detection / proctoring (Task 5) ---
+
+  async startFaceDetection(
+    videoEl: HTMLVideoElement,
+    onFlag: (event: ProctoringEvent) => void,
+  ): Promise<void> {
+    const { initFaceLandmarker, extractGaze } = await import('./mediapipe')
+    const landmarker = await initFaceLandmarker()
+
+    const detect = () => {
+      // Wait until video has actual dimensions
+      if (!videoEl.videoWidth) {
+        this.faceRafId = requestAnimationFrame(detect)
+        return
+      }
+
+      const result = landmarker.detectForVideo(videoEl, Date.now())
+      const { faceCount, yaw, pitch } = extractGaze(result)
+      const ts = new Date().toISOString()
+
+      if (faceCount === 0) {
+        onFlag({ type: 'face_absent', ts })
+      } else if (faceCount >= 2) {
+        onFlag({ type: 'face_multiple', ts, count: faceCount })
+      } else {
+        // Gaze-away: sustained >3 s of |yaw| > 30° OR |pitch| > 30°
+        const isLookingAway = Math.abs(yaw) > 30 || Math.abs(pitch) > 30
+        if (isLookingAway) {
+          if (!this.gazeAwayStart) this.gazeAwayStart = Date.now()
+          const duration = (Date.now() - this.gazeAwayStart) / 1000
+          if (duration > 3) {
+            onFlag({ type: 'gaze_away', ts, duration, yaw, pitch })
+          }
+        } else {
+          this.gazeAwayStart = null
+        }
+      }
+
+      this.faceRafId = requestAnimationFrame(detect)
+    }
+    this.faceRafId = requestAnimationFrame(detect)
+  }
+
+  stopFaceDetection(): void {
+    if (this.faceRafId) cancelAnimationFrame(this.faceRafId)
+    this.faceRafId = null
+    this.gazeAwayStart = null
+  }
 }
