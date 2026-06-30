@@ -8,7 +8,7 @@ interface CompletedScreenProps {
 
 export function CompletedScreen({ variant, session, message }: CompletedScreenProps) {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-8 text-center">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-gray-950 p-8 text-center text-white">
       {variant === 'success' ? (
         <>
           <svg
@@ -31,7 +31,7 @@ export function CompletedScreen({ variant, session, message }: CompletedScreenPr
               recorded and will be reviewed by our team.
             </p>
           )}
-          <p className="text-sm text-gray-600">You may close this tab.</p>
+          <p className="text-sm text-gray-400">You may close this tab.</p>
         </>
       ) : (
         <>
@@ -50,7 +50,7 @@ export function CompletedScreen({ variant, session, message }: CompletedScreenPr
           </svg>
           <h1 className="text-3xl font-bold">Something went wrong</h1>
           {message && <p className="max-w-md text-gray-400">{message}</p>}
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-gray-400">
             Please contact your recruiter if this issue persists.
           </p>
         </>
