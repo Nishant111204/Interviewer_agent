@@ -119,7 +119,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
 
   if (!detail) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950">
+      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-gray-700 border-t-blue-500" />
       </div>
     )
