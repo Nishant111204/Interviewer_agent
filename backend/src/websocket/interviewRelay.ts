@@ -10,6 +10,8 @@
  * canonical instruction and tool declarations) — we extract those values and
  * pass them in the live connect config so the conversation behaves exactly as
  * the agent brief specifies.
+ *
+ * Database access is performed through supabaseService (real DB, Task 3+).
  */
 
 import WebSocket from 'ws'
@@ -22,12 +24,12 @@ import {
   type Session,
   type FunctionDeclaration,
 } from '@google/genai'
-import { createInterviewerAgent, type QuestionSet } from '../agents/interviewer'
+import { createInterviewerAgent } from '../agents/interviewer'
 import { FunctionTool, LlmAgent } from '@google/adk'
 import { supabaseService } from '../services/supabase'
 
 // ---------------------------------------------------------------------------
-// Stub DB — replace with real supabaseService in Task 3
+// Browser message types
 // ---------------------------------------------------------------------------
 
 interface ProctoringFlag {
@@ -35,27 +37,6 @@ interface ProctoringFlag {
   ts: string
   [key: string]: unknown
 }
-
-interface StubDB {
-  getSession(token: string): Promise<StubSession | null>
-  saveScore(sessionId: string, questionId: string, score: number, notes: string): Promise<void>
-  finalizeSession(sessionId: string, recommendation: string, summary: string): Promise<void>
-  saveFlag(sessionId: string, flag: ProctoringFlag): Promise<void>
-  saveTranscriptTurn(sessionId: string, role: string, text: string): Promise<void>
-  markSessionStarted(sessionId: string): Promise<void>
-}
-
-interface StubSession {
-  id: string
-  status: string
-  expires_at: string
-  candidate_name: string
-  question_set: QuestionSet
-}
-
-// ---------------------------------------------------------------------------
-// Browser message types
-// ---------------------------------------------------------------------------
 
 interface BrowserMessage {
   type: 'audio' | 'video' | 'flag' | 'transcript'
@@ -280,7 +261,7 @@ async function handleGeminiMessage(
   msg: LiveServerMessage,
   ws: WebSocket,
   sessionId: string,
-  db: StubDB,
+  db: typeof supabaseService,
   liveSession: Session | null,
 ) {
   const content = msg.serverContent
@@ -295,7 +276,7 @@ async function handleGeminiMessage(
       }
       // Text part (transcript from model)
       if (part.text) {
-        db.saveTranscriptTurn(sessionId, 'model', part.text)
+        await db.saveTranscriptTurn(sessionId, 'model', part.text)
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'transcript', role: 'model', text: part.text }))
         }
@@ -306,7 +287,7 @@ async function handleGeminiMessage(
   // Input transcription (user's speech transcribed)
   if (content?.inputTranscription?.text) {
     const text = content.inputTranscription.text
-    db.saveTranscriptTurn(sessionId, 'user', text)
+    await db.saveTranscriptTurn(sessionId, 'user', text)
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'transcript', role: 'user', text }))
     }
@@ -315,7 +296,7 @@ async function handleGeminiMessage(
   // Output transcription (model speech transcribed)
   if (content?.outputTranscription?.text) {
     const text = content.outputTranscription.text
-    db.saveTranscriptTurn(sessionId, 'model', text)
+    await db.saveTranscriptTurn(sessionId, 'model', text)
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'transcript', role: 'model', text }))
     }
@@ -337,7 +318,7 @@ async function handleGeminiMessage(
 async function executeFunctionCalls(
   calls: FunctionCall[],
   sessionId: string,
-  db: StubDB,
+  db: typeof supabaseService,
 ): Promise<FunctionResponse[]> {
   const responses: FunctionResponse[] = []
 

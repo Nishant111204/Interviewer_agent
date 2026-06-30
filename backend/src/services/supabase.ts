@@ -47,48 +47,65 @@ export const supabaseService = {
   },
 
   async markSessionStarted(sessionId: string) {
-    await getClient()
+    const { error } = await getClient()
       .from('sessions')
       .update({ status: 'in_progress', started_at: new Date().toISOString() })
       .eq('id', sessionId)
+    if (error) console.error('[DB] markSessionStarted error:', error)
   },
 
   async saveScore(sessionId: string, questionId: string, score: number, notes: string) {
-    await getClient()
+    const supabase = getClient()
+
+    // Fetch the most-recent unscored candidate turn for this session
+    const { data: turns, error: fetchErr } = await supabase
       .from('transcript_turns')
-      .update({ score, question_id: questionId })
+      .select('id')
       .eq('session_id', sessionId)
       .eq('role', 'candidate')
       .is('question_id', null)
       .order('ts', { ascending: false })
       .limit(1)
 
-    // Also insert a notes record
-    await getClient().from('transcript_turns').insert({
+    if (fetchErr) {
+      console.error('[DB] saveScore fetch error:', fetchErr)
+    } else if (turns && turns.length > 0) {
+      const { error: updateErr } = await supabase
+        .from('transcript_turns')
+        .update({ score, question_id: questionId })
+        .eq('id', turns[0].id)
+      if (updateErr) console.error('[DB] saveScore update error:', updateErr)
+    }
+
+    // Insert a scorer notes record
+    const { error: insertErr } = await supabase.from('transcript_turns').insert({
       session_id: sessionId,
       role: 'model',
       text: `[Score: ${score}/10] ${notes}`,
       question_id: questionId,
       score,
     })
+    if (insertErr) console.error('[DB] saveScore insert error:', insertErr)
   },
 
   async saveTranscriptTurn(sessionId: string, role: string, text: string) {
-    await getClient().from('transcript_turns').insert({ session_id: sessionId, role, text })
+    const { error } = await getClient().from('transcript_turns').insert({ session_id: sessionId, role, text })
+    if (error) console.error('[DB] saveTranscriptTurn error:', error)
   },
 
   async saveFlag(sessionId: string, flag: { type: string; ts: string; [k: string]: unknown }) {
-    await getClient().from('proctoring_flags').insert({
+    const { error } = await getClient().from('proctoring_flags').insert({
       session_id: sessionId,
       flag_type: flag.type,
       severity: FLAG_SEVERITY[flag.type] ?? 'low',
       detail: flag,
       ts: flag.ts,
     })
+    if (error) console.error('[DB] saveFlag error:', error)
   },
 
   async finalizeSession(sessionId: string, recommendation: string, _summary: string) {
-    await getClient()
+    const { error } = await getClient()
       .from('sessions')
       .update({
         status: 'completed',
@@ -96,6 +113,7 @@ export const supabaseService = {
         recommendation,
       })
       .eq('id', sessionId)
+    if (error) console.error('[DB] finalizeSession error:', error)
   },
 
   async createSession(params: {
@@ -126,9 +144,9 @@ export const supabaseService = {
     return data ?? []
   },
 
-  async getSessionDetail(sessionId: string) {
+  async getSessionDetail(sessionId: string, orgId: string) {
     const [{ data: session }, { data: turns }, { data: flags }] = await Promise.all([
-      getClient().from('sessions').select('*').eq('id', sessionId).single(),
+      getClient().from('sessions').select('*').eq('id', sessionId).eq('org_id', orgId).single(),
       getClient().from('transcript_turns').select('*').eq('session_id', sessionId).order('ts'),
       getClient().from('proctoring_flags').select('*').eq('session_id', sessionId).order('ts'),
     ])

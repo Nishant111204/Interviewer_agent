@@ -49,7 +49,7 @@ router.get('/', async (req: AuthRequest, res) => {
 // GET /api/sessions/:id — full session detail
 router.get('/:id', async (req: AuthRequest, res) => {
   try {
-    const detail = await supabaseService.getSessionDetail(req.params.id)
+    const detail = await supabaseService.getSessionDetail(req.params.id, req.orgId!)
     if (!detail.session) {
       res.status(404).json({ error: 'Session not found' })
       return
