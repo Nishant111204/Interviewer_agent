@@ -1,19 +1,3 @@
-/**
- * interviewRelay.ts
- *
- * WebSocket relay between the browser and the Gemini Live API.
- *
- * ADK context:  @google/adk v0.1.3 exports LlmAgent but its runLiveFlow()
- * method throws "not implemented". We therefore bypass the ADK runner and
- * drive the Gemini Live API directly through @google/genai's
- * GoogleGenAI.live.connect().  The ADK LlmAgent is still created (for its
- * canonical instruction and tool declarations) — we extract those values and
- * pass them in the live connect config so the conversation behaves exactly as
- * the agent brief specifies.
- *
- * Database access is performed through supabaseService (real DB, Task 3+).
- */
-
 import WebSocket from 'ws'
 import {
   GoogleGenAI,
@@ -22,15 +6,9 @@ import {
   type LiveServerMessage,
   type FunctionCall,
   type Session,
-  type FunctionDeclaration,
 } from '@google/genai'
-import { createInterviewerAgent } from '../agents/interviewer'
-import { FunctionTool, LlmAgent } from '@google/adk'
+import { buildSystemPrompt, interviewerTools, executeTool } from '../agents/interviewer'
 import { supabaseService } from '../services/supabase'
-
-// ---------------------------------------------------------------------------
-// Browser message types
-// ---------------------------------------------------------------------------
 
 interface ProctoringFlag {
   type: string
@@ -40,87 +18,23 @@ interface ProctoringFlag {
 
 interface BrowserMessage {
   type: 'audio' | 'video' | 'flag' | 'transcript'
-  data?: string       // base64 for audio/video
+  data?: string
   event?: ProctoringFlag
   text?: string
   role?: string
 }
 
-// ---------------------------------------------------------------------------
-// Helper: extract canonical instruction string from LlmAgent
-// ---------------------------------------------------------------------------
-
-function getAgentInstruction(agent: LlmAgent): string {
-  const instr = agent.canonicalInstruction
-  if (typeof instr === 'string') return instr
-  // canonicalInstruction may be a provider function in some agent configs;
-  // for v0.1.3 our agent always uses a string literal.
-  return String(instr ?? '')
-}
-
-// ---------------------------------------------------------------------------
-// Helper: build tool declaration list from the agent's FunctionTool list.
-// We call the tool's _getDeclaration() method (present in v0.1.3) to get the
-// { name, description, parameters } object expected by the Live API.
-// ---------------------------------------------------------------------------
-
-type ToolWithDeclaration = FunctionTool & {
-  _getDeclaration(): FunctionDeclaration
-}
-
-async function buildToolDeclarations(agent: LlmAgent): Promise<FunctionDeclaration[]> {
-  // canonicalTools() is an async method returning BaseTool[]
-  const tools = await agent.canonicalTools()
-  const declarations: FunctionDeclaration[] = []
-  for (const t of tools) {
-    if (!(t instanceof FunctionTool) || !('_getDeclaration' in t)) continue
-    try {
-      const decl = (t as ToolWithDeclaration)._getDeclaration()
-      if (decl) declarations.push(decl)
-    } catch (err) {
-      console.error(`[ADK] Failed to get declaration for tool ${t.name}:`, err)
-    }
-  }
-  return declarations
-}
-
-// ---------------------------------------------------------------------------
-// Main handler
-// ---------------------------------------------------------------------------
-
 export async function handleInterviewSocket(ws: WebSocket, token: string) {
   const db = supabaseService
 
-  // --- GUARD: validate session upfront ---
   const session = await db.getSession(token)
-  if (!session) {
-    ws.close(4001, 'Session not found')
-    return
-  }
-  if (session.status !== 'pending') {
-    ws.close(4002, 'Session already completed or expired')
-    return
-  }
-  if (new Date(session.expires_at) <= new Date()) {
-    ws.close(4003, 'Session link expired')
-    return
-  }
+  if (!session) { ws.close(4001, 'Session not found'); return }
+  if (session.status !== 'pending') { ws.close(4002, 'Session already completed or expired'); return }
+  if (new Date(session.expires_at) <= new Date()) { ws.close(4003, 'Session link expired'); return }
 
   await db.markSessionStarted(session.id)
   console.log(`[WS] Interview started: session=${session.id}`)
 
-  // --- Build ADK agent to extract instruction + tool declarations ---
-  const agent = createInterviewerAgent(
-    session.question_set,
-    session.id,
-    db,
-    session.candidate_name,
-  )
-
-  const systemInstruction = getAgentInstruction(agent)
-  const toolDeclarations = await buildToolDeclarations(agent)
-
-  // --- Connect to Gemini Live API via @google/genai ---
   const apiKey = process.env.GOOGLE_API_KEY
   if (!apiKey) {
     console.error('[WS] GOOGLE_API_KEY not set')
@@ -129,24 +43,18 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
   }
 
   const ai = new GoogleGenAI({ apiKey })
-
-  // liveSession will be set after connect() resolves
   let liveSession: Session | null = null
   let sessionClosed = false
-
-  // Queue incoming browser audio/video until session is ready
   const pendingMessages: BrowserMessage[] = []
 
   const connectPromise = ai.live.connect({
     model: 'gemini-live-2.5-flash',
     config: {
       responseModalities: [Modality.AUDIO],
-      systemInstruction: systemInstruction
-        ? { parts: [{ text: systemInstruction }] }
-        : undefined,
-      tools: toolDeclarations.length > 0
-        ? [{ functionDeclarations: toolDeclarations }]
-        : undefined,
+      systemInstruction: {
+        parts: [{ text: buildSystemPrompt(session.question_set, session.candidate_name) }],
+      },
+      tools: [{ functionDeclarations: interviewerTools }],
     },
     callbacks: {
       onopen: () => {
@@ -163,9 +71,7 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
       onclose: (e: { code?: number; reason?: string }) => {
         console.log('[WS] Gemini Live closed:', e.code, e.reason)
         sessionClosed = true
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1000, 'AI session ended')
-        }
+        if (ws.readyState === WebSocket.OPEN) ws.close(1000, 'AI session ended')
       },
     },
   })
@@ -173,7 +79,6 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
   connectPromise
     .then((ls) => {
       liveSession = ls
-      // Drain any messages queued while connecting
       for (const msg of pendingMessages) {
         dispatchToGemini(msg, liveSession!).catch((err) =>
           console.error('[WS] Drain error:', err),
@@ -186,76 +91,40 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
       ws.close(1011, 'Failed to start AI session')
     })
 
-  // --- Relay browser messages to Gemini ---
   ws.on('message', async (raw) => {
     let msg: BrowserMessage
-    try {
-      msg = JSON.parse(raw.toString())
-    } catch {
-      return
-    }
+    try { msg = JSON.parse(raw.toString()) } catch { return }
 
     if (msg.type === 'flag') {
-      if (msg.event) {
-        await db.saveFlag(session.id, msg.event)
-      }
+      if (msg.event) await db.saveFlag(session.id, msg.event)
       return
     }
 
-    if (!liveSession) {
-      // Buffer until session is ready
-      pendingMessages.push(msg)
-      return
-    }
-
+    if (!liveSession) { pendingMessages.push(msg); return }
     await dispatchToGemini(msg, liveSession)
   })
 
   ws.on('close', () => {
     console.log(`[WS] Browser disconnected: session=${session.id}`)
-    if (!sessionClosed) {
-      liveSession?.close()
-    }
+    if (!sessionClosed) liveSession?.close()
   })
 
   ws.on('error', (err) => {
     console.error('[WS] Browser socket error:', err)
-    if (!sessionClosed) {
-      liveSession?.close()
-    }
+    if (!sessionClosed) liveSession?.close()
   })
 }
-
-// ---------------------------------------------------------------------------
-// Dispatch a browser message to the Gemini Live session
-// ---------------------------------------------------------------------------
 
 async function dispatchToGemini(msg: BrowserMessage, liveSession: Session) {
   switch (msg.type) {
     case 'audio':
-      if (msg.data) {
-        await liveSession.sendRealtimeInput({
-          audio: { data: msg.data, mimeType: 'audio/pcm;rate=16000' },
-        })
-      }
+      if (msg.data) await liveSession.sendRealtimeInput({ audio: { data: msg.data, mimeType: 'audio/pcm;rate=16000' } })
       break
-
     case 'video':
-      if (msg.data) {
-        await liveSession.sendRealtimeInput({
-          video: { data: msg.data, mimeType: 'image/jpeg' },
-        })
-      }
-      break
-
-    default:
+      if (msg.data) await liveSession.sendRealtimeInput({ video: { data: msg.data, mimeType: 'image/jpeg' } })
       break
   }
 }
-
-// ---------------------------------------------------------------------------
-// Handle a message arriving from Gemini Live
-// ---------------------------------------------------------------------------
 
 async function handleGeminiMessage(
   msg: LiveServerMessage,
@@ -268,13 +137,9 @@ async function handleGeminiMessage(
 
   if (content?.modelTurn?.parts) {
     for (const part of content.modelTurn.parts) {
-      // Audio chunk from Gemini (PCM16 24kHz, base64)
-      if (part.inlineData?.data) {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'audio', data: part.inlineData.data }))
-        }
+      if (part.inlineData?.data && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'audio', data: part.inlineData.data }))
       }
-      // Text part (transcript from model)
       if (part.text) {
         await db.saveTranscriptTurn(sessionId, 'model', part.text)
         if (ws.readyState === WebSocket.OPEN) {
@@ -284,38 +149,25 @@ async function handleGeminiMessage(
     }
   }
 
-  // Input transcription (user's speech transcribed)
   if (content?.inputTranscription?.text) {
     const text = content.inputTranscription.text
     await db.saveTranscriptTurn(sessionId, 'user', text)
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'transcript', role: 'user', text }))
-    }
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'transcript', role: 'user', text }))
   }
 
-  // Output transcription (model speech transcribed)
   if (content?.outputTranscription?.text) {
     const text = content.outputTranscription.text
     await db.saveTranscriptTurn(sessionId, 'model', text)
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'transcript', role: 'model', text }))
-    }
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'transcript', role: 'model', text }))
   }
 
-  // Tool call — Gemini wants us to execute a function
   if (msg.toolCall?.functionCalls && liveSession) {
-    const responses = await executeFunctionCalls(msg.toolCall.functionCalls, sessionId, db)
-    if (responses.length > 0) {
-      liveSession.sendToolResponse({ functionResponses: responses })
-    }
+    const responses = await runToolCalls(msg.toolCall.functionCalls, sessionId, db)
+    if (responses.length > 0) liveSession.sendToolResponse({ functionResponses: responses })
   }
 }
 
-// ---------------------------------------------------------------------------
-// Execute tool calls requested by the model and return FunctionResponse objects
-// ---------------------------------------------------------------------------
-
-async function executeFunctionCalls(
+async function runToolCalls(
   calls: FunctionCall[],
   sessionId: string,
   db: typeof supabaseService,
@@ -325,32 +177,17 @@ async function executeFunctionCalls(
   for (const call of calls) {
     const name = call.name ?? ''
     const args = (call.args ?? {}) as Record<string, unknown>
-    const id = call.id ?? ''
-    let result: Record<string, unknown> = {}
+    let result: Record<string, unknown>
 
     try {
-      if (name === 'score_answer') {
-        const questionId = args['question_id'] as string
-        const score = args['score'] as number
-        const notes = args['notes'] as string
-        await db.saveScore(sessionId, questionId, score, notes)
-        result = { saved: true }
-      } else if (name === 'end_interview') {
-        const recommendation = args['recommendation'] as string
-        const summary = args['summary'] as string
-        await db.finalizeSession(sessionId, recommendation, summary)
-        result = { ended: true }
-      } else {
-        console.warn('[WS] Unknown tool call:', name)
-        result = { error: `Unknown function: ${name}` }
-      }
+      result = await executeTool(name, args, sessionId, db)
     } catch (err) {
       console.error(`[WS] Error executing tool ${name}:`, err)
       result = { error: String(err) }
     }
 
     const fr = new FunctionResponse()
-    fr.id = id
+    fr.id = call.id ?? ''
     fr.name = name
     fr.response = result
     responses.push(fr)

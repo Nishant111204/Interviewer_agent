@@ -1,8 +1,4 @@
-// @google/adk v0.1.3 exports LlmAgent (not Agent) and FunctionTool (not a tool() helper).
-// The brief was written against a pre-release API shape. We adapt accordingly.
-// Schema.type requires the Type enum from @google/genai (not plain string literals).
-import { LlmAgent, FunctionTool } from '@google/adk'
-import { Type } from '@google/genai'
+import { Type, type FunctionDeclaration } from '@google/genai'
 
 export interface Question {
   id: string
@@ -18,7 +14,6 @@ export interface QuestionSet {
   questions: Question[]
 }
 
-// Default question set for frontend developer role
 export const frontendQuestionSet: QuestionSet = {
   id: 'fe-default',
   name: 'Frontend Developer',
@@ -57,72 +52,12 @@ export const frontendQuestionSet: QuestionSet = {
   ],
 }
 
-interface DB {
-  saveScore(sessionId: string, questionId: string, score: number, notes: string): Promise<void>
-  finalizeSession(sessionId: string, recommendation: string, summary: string): Promise<void>
-}
-
-export function createInterviewerAgent(
-  questionSet: QuestionSet,
-  sessionId: string,
-  db: DB,
-  candidateName: string,
-) {
-  // NOTE: @google/adk v0.1.3 uses FunctionTool class (not a `tool()` helper as shown in the brief).
-  // The Schema.type field requires the Type enum from @google/genai (not plain string literals).
-
-  const scoreAnswer = new FunctionTool({
-    name: 'score_answer',
-    description: "Score the candidate's answer to the current question",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        question_id: { type: Type.STRING, description: 'The question ID being scored' },
-        score: { type: Type.NUMBER, description: 'Score from 1 to 10' },
-        notes: { type: Type.STRING, description: 'Brief evaluation notes for the HR report' },
-      },
-      required: ['question_id', 'score', 'notes'],
-    },
-    execute: async (input: unknown) => {
-      const { question_id, score, notes } = input as { question_id: string; score: number; notes: string }
-      await db.saveScore(sessionId, question_id, score, notes)
-      return { saved: true }
-    },
-  })
-
-  const endInterview = new FunctionTool({
-    name: 'end_interview',
-    description: 'End the interview after all questions are complete and provide final recommendation',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        recommendation: {
-          type: Type.STRING,
-          description: 'Hiring recommendation: one of "Strong Hire", "Hire", or "No Hire"',
-        },
-        summary: {
-          type: Type.STRING,
-          description: 'Two to three sentence summary of the candidate performance',
-        },
-      },
-      required: ['recommendation', 'summary'],
-    },
-    execute: async (input: unknown) => {
-      const { recommendation, summary } = input as { recommendation: string; summary: string }
-      await db.finalizeSession(sessionId, recommendation, summary)
-      return { ended: true }
-    },
-  })
-
+export function buildSystemPrompt(questionSet: QuestionSet, candidateName: string): string {
   const questions = questionSet.questions
     .map((q, i) => `${i + 1}. [ID: ${q.id}] ${q.text}`)
     .join('\n')
 
-  return new LlmAgent({
-    model: 'gemini-live-2.5-flash',
-    name: 'interviewer',
-    instruction: `
-You are a professional technical interviewer for Wohlig Transformations conducting a ${questionSet.role} interview.
+  return `You are a professional technical interviewer for Wohlig Transformations conducting a ${questionSet.role} interview.
 
 INTERVIEW FLOW:
 1. Greet ${candidateName} warmly by name. Tell them the interview will take about 20 minutes and you will ask ${questionSet.questions.length} questions.
@@ -143,8 +78,72 @@ SCORING RUBRIC (1–10):
 - 9–10: Excellent, detailed, demonstrates real expertise
 
 Do NOT tell the candidate their scores. Do NOT rush through questions.
-Do NOT ask two questions at once. Wait for a complete answer before scoring and moving on.
-    `.trim(),
-    tools: [scoreAnswer, endInterview],
-  })
+Do NOT ask two questions at once. Wait for a complete answer before scoring and moving on.`.trim()
+}
+
+export const interviewerTools: FunctionDeclaration[] = [
+  {
+    name: 'score_answer',
+    description: "Score the candidate's answer to the current question",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        question_id: { type: Type.STRING, description: 'The question ID being scored' },
+        score: { type: Type.NUMBER, description: 'Score from 1 to 10' },
+        notes: { type: Type.STRING, description: 'Brief evaluation notes for the HR report' },
+      },
+      required: ['question_id', 'score', 'notes'],
+    },
+  },
+  {
+    name: 'end_interview',
+    description: 'End the interview after all questions are complete and provide final recommendation',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        recommendation: {
+          type: Type.STRING,
+          description: 'Hiring recommendation: one of "Strong Hire", "Hire", or "No Hire"',
+        },
+        summary: {
+          type: Type.STRING,
+          description: 'Two to three sentence summary of the candidate performance',
+        },
+      },
+      required: ['recommendation', 'summary'],
+    },
+  },
+]
+
+interface DB {
+  saveScore(sessionId: string, questionId: string, score: number, notes: string): Promise<void>
+  finalizeSession(sessionId: string, recommendation: string, summary: string): Promise<void>
+}
+
+export async function executeTool(
+  name: string,
+  args: Record<string, unknown>,
+  sessionId: string,
+  db: DB,
+): Promise<Record<string, unknown>> {
+  if (name === 'score_answer') {
+    await db.saveScore(
+      sessionId,
+      args['question_id'] as string,
+      args['score'] as number,
+      args['notes'] as string,
+    )
+    return { saved: true }
+  }
+
+  if (name === 'end_interview') {
+    await db.finalizeSession(
+      sessionId,
+      args['recommendation'] as string,
+      args['summary'] as string,
+    )
+    return { ended: true }
+  }
+
+  return { error: `Unknown function: ${name}` }
 }
