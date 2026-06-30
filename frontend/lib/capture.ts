@@ -241,7 +241,6 @@ export class InterviewCapture {
       if (!result.isMatch) {
         const ts = new Date().toISOString()
         onFlag({ type: 'impersonation', ts, distance: result.distance })
-        this.sendFlag({ type: 'impersonation', ts, distance: result.distance })
       }
     }
 
