@@ -176,4 +176,22 @@ export const supabaseService = {
     }
     return 'ok'
   },
+
+  async getHrUser(userId: string): Promise<{ org_id: string } | null> {
+    const { data, error } = await getClient()
+      .from('hr_users')
+      .select('org_id')
+      .eq('id', userId)
+      .single()
+    if (error || !data) return null
+    return { org_id: data.org_id as string }
+  },
+
+  async listQuestionSets(): Promise<Array<{ id: string; role: string }>> {
+    const { data, error } = await getClient()
+      .from('question_sets')
+      .select('id, role')
+    if (error) throw error
+    return (data ?? []) as Array<{ id: string; role: string }>
+  },
 }
