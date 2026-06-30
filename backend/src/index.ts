@@ -6,6 +6,7 @@ import { URL } from 'url'
 import { handleInterviewSocket } from './websocket/interviewRelay'
 import sessionsRouter from './routes/sessions'
 import candidateRouter from './routes/candidate'
+import questionSetsRouter from './routes/questionSets'
 
 const app = express()
 app.use(express.json())
@@ -18,6 +19,9 @@ app.use('/api/sessions', sessionsRouter)
 
 // REST routes — candidate (token-based auth, no JWT)
 app.use('/candidate', candidateRouter)
+
+// REST routes — question sets (JWT-protected)
+app.use('/api/question-sets', questionSetsRouter)
 
 const server = createServer(app)
 const wss = new WebSocketServer({ noServer: true })

@@ -28,7 +28,7 @@ router.post('/', async (req: AuthRequest, res) => {
       jobTitle: job_title,
       token: session.token,
     })
-    res.status(201).json({ id: session.id })
+    res.status(201).json({ id: session.id, token: session.token })
   } catch (err) {
     console.error('[POST /api/sessions]', err)
     res.status(500).json({ error: 'Failed to create session' })
