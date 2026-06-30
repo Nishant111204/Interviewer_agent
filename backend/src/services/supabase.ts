@@ -63,7 +63,7 @@ export const supabaseService = {
       .from('transcript_turns')
       .select('id')
       .eq('session_id', sessionId)
-      .eq('role', 'candidate')
+      .eq('role', 'user')
       .is('question_id', null)
       .order('ts', { ascending: false })
       .limit(1)

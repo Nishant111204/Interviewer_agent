@@ -43,7 +43,7 @@ function calcSuspicionScore(flags: FlagRow[]): number {
 
 function calcOverallScore(turns: TurnRow[]): number | null {
   const scored = turns
-    .filter(t => t.role === 'candidate' && t.score != null)
+    .filter(t => t.role === 'user' && t.score != null)
     .map(t => t.score as number)
   if (scored.length === 0) return null
   const avg = scored.reduce((a, b) => a + b, 0) / scored.length
