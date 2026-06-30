@@ -18,7 +18,7 @@ export function PreflightScreen({
   onBegin,
 }: PreflightScreenProps) {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-8">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-gray-950 p-8 text-white">
       <div className="text-center">
         <h1 className="text-2xl font-bold">Hello, {session.candidateName}</h1>
         <p className="mt-1 text-gray-400">Role: {session.role}</p>
@@ -31,6 +31,7 @@ export function PreflightScreen({
       <SelfieCapture sessionToken={token} onCapture={onCapture} />
 
       <button
+        type="button"
         onClick={onBegin}
         disabled={descriptor === null}
         className="mt-2 rounded-lg bg-blue-600 px-8 py-3 font-semibold transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
