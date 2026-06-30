@@ -98,11 +98,11 @@ export default function HrPage() {
         setModalError(body.error ?? 'Failed to create session')
         return
       }
-      const { token } = (await res.json()) as { id: string; token: string }
+      const { id, token } = (await res.json()) as { id: string; token: string }
       setInviteToken(token)
       setSessions(prev => [
         {
-          id: token,
+          id: id,
           candidate_name: form.candidate_name,
           job_title: form.job_title,
           status: 'pending',
@@ -187,7 +187,7 @@ export default function HrPage() {
                     <span
                       className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[s.status] ?? 'bg-gray-700 text-gray-300'}`}
                     >
-                      {s.status.replace('_', ' ')}
+                      {s.status.replace(/_/g, ' ')}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-400">{formatDate(s.created_at)}</td>

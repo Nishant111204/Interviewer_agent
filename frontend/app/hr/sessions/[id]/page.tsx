@@ -148,7 +148,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
           <span
             className={`rounded-full px-3 py-1 text-xs font-medium ${STATUS_BADGE[session.status] ?? 'bg-gray-700 text-gray-300'}`}
           >
-            {session.status.replace('_', ' ')}
+            {session.status.replace(/_/g, ' ')}
           </span>
           <span className="text-xs text-gray-500">
             Created {formatDateTime(session.created_at)}
