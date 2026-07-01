@@ -5,22 +5,20 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from './AuthContext'
 
-const REST_BASE = process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:3001'
+const REST_BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001'
 const INVITE_BASE = process.env.NEXT_PUBLIC_INTERVIEW_BASE_URL ?? 'http://localhost:3000'
 
 interface Session {
   id: string
   candidate_name: string
+  candidate_email: string
   job_title: string
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
   overall_score: number | null
   created_at: string
 }
 
-interface QuestionSet {
-  id: string
-  role: string
-}
+interface QuestionSet { id: string; role: string }
 
 interface CreateForm {
   candidate_name: string
@@ -29,36 +27,49 @@ interface CreateForm {
   question_set_id: string
 }
 
-const STATUS_BADGE: Record<string, string> = {
-  pending: 'bg-gray-700 text-gray-300',
-  in_progress: 'bg-blue-900 text-blue-300 animate-pulse',
-  completed: 'bg-green-900 text-green-300',
-  cancelled: 'bg-red-900 text-red-300',
+const EMPTY_FORM: CreateForm = { candidate_name: '', candidate_email: '', job_title: '', question_set_id: '' }
+
+const STATUS_STYLES: Record<string, { dot: string; text: string; bg: string }> = {
+  pending:     { dot: 'bg-slate-500',  text: 'text-slate-400',  bg: 'bg-slate-500/10 border-slate-500/20' },
+  in_progress: { dot: 'bg-blue-500 animate-pulse', text: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/20' },
+  completed:   { dot: 'bg-green-500',  text: 'text-green-400',  bg: 'bg-green-500/10 border-green-500/20' },
+  cancelled:   { dot: 'bg-red-500',    text: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20' },
 }
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-const EMPTY_FORM: CreateForm = {
-  candidate_name: '',
-  candidate_email: '',
-  job_title: '',
-  question_set_id: '',
+function ScoreBar({ score }: { score: number | null }) {
+  if (score == null) return <span className="text-slate-600">—</span>
+  const pct = (score / 10) * 100
+  const color = score >= 7 ? 'bg-green-500' : score >= 4 ? 'bg-amber-500' : 'bg-red-500'
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-white/10">
+        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs text-slate-400">{score}/10</span>
+    </div>
+  )
+}
+
+function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+  return (
+    <div className="glass-card p-5">
+      <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</p>
+      <p className="mt-1.5 text-3xl font-bold">{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-slate-600">{sub}</p>}
+    </div>
+  )
 }
 
 export default function HrPage() {
   const { accessToken } = useAuth()
   const router = useRouter()
-
   const [sessions, setSessions] = useState<Session[]>([])
   const [questionSets, setQuestionSets] = useState<QuestionSet[]>([])
   const [loading, setLoading] = useState(true)
-
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState<CreateForm>(EMPTY_FORM)
   const [submitting, setSubmitting] = useState(false)
@@ -69,23 +80,15 @@ export default function HrPage() {
     if (!accessToken) return
     const headers: HeadersInit = { Authorization: `Bearer ${accessToken}` }
     Promise.all([
-      fetch(`${REST_BASE}/api/sessions`, { headers }).then(async r => {
-        const body = await r.json()
-        if (!r.ok) console.error('[sessions]', r.status, body)
-        return body
-      }),
-      fetch(`${REST_BASE}/api/question-sets`, { headers }).then(async r => {
-        const body = await r.json()
-        if (!r.ok) console.error('[question-sets]', r.status, body)
-        return body
-      }),
+      fetch(`${REST_BASE}/api/sessions`, { headers }).then(r => r.json()),
+      fetch(`${REST_BASE}/api/question-sets`, { headers }).then(r => r.json()),
     ])
       .then(([sess, qs]) => {
         setSessions(Array.isArray(sess) ? (sess as Session[]) : [])
         setQuestionSets(Array.isArray(qs) ? (qs as QuestionSet[]) : [])
         setLoading(false)
       })
-      .catch(err => { console.error('[fetch error]', err); setLoading(false) })
+      .catch((err: unknown) => { console.error('[hr] failed to load sessions:', err); setLoading(false) })
   }, [accessToken])
 
   async function handleCreate(e: React.FormEvent) {
@@ -95,10 +98,7 @@ export default function HrPage() {
     try {
       const res = await fetch(`${REST_BASE}/api/sessions`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       })
       if (!res.ok) {
@@ -108,224 +108,193 @@ export default function HrPage() {
       }
       const { id, token } = (await res.json()) as { id: string; token: string }
       setInviteToken(token)
-      setSessions(prev => [
-        {
-          id: id,
-          candidate_name: form.candidate_name,
-          job_title: form.job_title,
-          status: 'pending',
-          overall_score: null,
-          created_at: new Date().toISOString(),
-        },
-        ...prev,
-      ])
-    } catch {
-      setModalError('Network error')
-    } finally {
-      setSubmitting(false)
-    }
+      setSessions(prev => [{
+        id, candidate_name: form.candidate_name, candidate_email: form.candidate_email,
+        job_title: form.job_title, status: 'pending', overall_score: null,
+        created_at: new Date().toISOString(),
+      }, ...prev])
+    } catch { setModalError('Network error') }
+    finally { setSubmitting(false) }
   }
 
-  function closeModal() {
-    setShowModal(false)
-    setInviteToken(null)
-    setModalError(null)
-    setForm(EMPTY_FORM)
-  }
+  function closeModal() { setShowModal(false); setInviteToken(null); setModalError(null); setForm(EMPTY_FORM) }
 
-  function handleCreateAnother() {
-    setInviteToken(null)
-    setModalError(null)
-    setForm(EMPTY_FORM)
-  }
+  // Stats
+  const inProgress = sessions.filter(s => s.status === 'in_progress').length
+  const completed = sessions.filter(s => s.status === 'completed').length
+  const scores = sessions.map(s => s.overall_score).filter((s): s is number => s != null)
+  const avgScore = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : '—'
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-gray-700 border-t-blue-500" />
+      <div className="flex min-h-screen items-center justify-center bg-navy-950">
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/10 border-t-blue-500" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 p-6 text-white">
+    <div className="min-h-screen bg-navy-950 text-white">
       {/* Top bar */}
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-bold">InterviewAI HR</h1>
-        <div className="flex gap-3">
-          <button
-            type="button"
-            onClick={() => setShowModal(true)}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold hover:bg-blue-500"
-          >
-            New Interview
-          </button>
-          <button
-            type="button"
-            onClick={() => supabase.auth.signOut()}
-            className="rounded-lg bg-gray-800 px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
-          >
-            Logout
-          </button>
+      <header className="border-b border-white/8 px-6 py-4">
+        <div className="mx-auto flex max-w-7xl items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600/20 border border-blue-500/20">
+              <svg className="h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+              </svg>
+            </div>
+            <span className="font-semibold">InterviewAI</span>
+            <span className="rounded-full bg-blue-600/20 px-2 py-0.5 text-xs text-blue-400 font-medium border border-blue-500/20">HR</span>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={() => setShowModal(true)} className="btn-primary py-2 text-sm">
+              + New Interview
+            </button>
+            <button onClick={() => supabase.auth.signOut()} className="btn-ghost py-2 text-sm">
+              Logout
+            </button>
+          </div>
         </div>
-      </div>
+      </header>
 
-      {/* Sessions table */}
-      {sessions.length === 0 ? (
-        <p className="text-gray-500">No sessions yet. Create one using &ldquo;New Interview&rdquo;.</p>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-gray-800">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-800 bg-gray-900 text-left text-gray-400">
-                <th className="px-4 py-3">Candidate</th>
-                <th className="px-4 py-3">Job Title</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Created</th>
-                <th className="px-4 py-3">Score</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map(s => (
-                <tr key={s.id} className="border-b border-gray-800 hover:bg-gray-900">
-                  <td className="px-4 py-3 font-medium">{s.candidate_name}</td>
-                  <td className="px-4 py-3 text-gray-400">{s.job_title}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[s.status] ?? 'bg-gray-700 text-gray-300'}`}
-                    >
-                      {s.status.replace(/_/g, ' ')}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-400">{formatDate(s.created_at)}</td>
-                  <td className="px-4 py-3 text-gray-400">
-                    {s.overall_score != null ? `${s.overall_score}/10` : '—'}
-                  </td>
-                  <td className="px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() => router.push(`/hr/sessions/${s.id}`)}
-                      className="rounded bg-gray-800 px-3 py-1 text-xs hover:bg-gray-700"
-                    >
-                      View
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <main className="mx-auto max-w-7xl px-6 py-8">
+        {/* Stats */}
+        <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <StatCard label="Total Sessions" value={sessions.length} />
+          <StatCard label="In Progress" value={inProgress} sub={inProgress > 0 ? 'Active now' : 'None active'} />
+          <StatCard label="Completed" value={completed} />
+          <StatCard label="Avg Score" value={avgScore} sub={scores.length > 0 ? `from ${scores.length} interviews` : 'No scores yet'} />
         </div>
-      )}
+
+        {/* Sessions table */}
+        <div className="glass-card overflow-hidden">
+          <div className="border-b border-white/8 px-5 py-4">
+            <h2 className="font-semibold">Interview Sessions</h2>
+          </div>
+          {sessions.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 py-16 text-center">
+              <p className="text-slate-500">No sessions yet.</p>
+              <button onClick={() => setShowModal(true)} className="btn-primary py-2 text-sm">
+                Create your first interview
+              </button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/8 text-left">
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Candidate</th>
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Role</th>
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Status</th>
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Score</th>
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Created</th>
+                    <th className="px-5 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sessions.map(s => {
+                    const style = STATUS_STYLES[s.status] ?? STATUS_STYLES.pending
+                    return (
+                      <tr key={s.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                        <td className="px-5 py-3.5">
+                          <p className="font-medium">{s.candidate_name}</p>
+                          <p className="text-xs text-slate-600">{s.candidate_email}</p>
+                        </td>
+                        <td className="px-5 py-3.5 text-slate-400">{s.job_title}</td>
+                        <td className="px-5 py-3.5">
+                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${style.bg} ${style.text}`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+                            {s.status.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5"><ScoreBar score={s.overall_score} /></td>
+                        <td className="px-5 py-3.5 text-slate-500 text-xs">{formatDate(s.created_at)}</td>
+                        <td className="px-5 py-3.5">
+                          <button
+                            onClick={() => router.push(`/hr/sessions/${s.id}`)}
+                            className="rounded-lg bg-white/5 border border-white/8 px-3 py-1.5 text-xs font-medium hover:bg-white/10 transition-all"
+                          >
+                            View →
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </main>
 
       {/* Create Interview Modal */}
       {showModal && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-xl bg-gray-900 p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="glass-card w-full max-w-md p-6 animate-slide-up">
             {inviteToken ? (
-              /* Success state — show invite link */
               <>
-                <h2 className="mb-4 text-lg font-bold text-green-400">✅ Invite Created</h2>
-                <p className="mb-2 text-sm text-gray-400">
-                  Copy this link and send it to the candidate:
-                </p>
-                <div className="mb-4 flex items-center gap-2 rounded-lg bg-gray-800 px-3 py-2">
-                  <span className="flex-1 truncate text-xs text-gray-300">
-                    {`${INVITE_BASE}/interview/${inviteToken}`}
-                  </span>
+                <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-green-500/15 border border-green-500/20">
+                  <svg className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+                  </svg>
+                </div>
+                <h2 className="mb-1 text-lg font-bold text-green-400">Invite Created</h2>
+                <p className="mb-4 text-sm text-slate-400">Copy this link and send it to the candidate:</p>
+                <div className="mb-4 flex items-center gap-2 rounded-xl bg-white/5 border border-white/10 px-3 py-2">
+                  <span className="flex-1 truncate text-xs text-slate-300">{`${INVITE_BASE}/interview/${inviteToken}`}</span>
                   <button
-                    type="button"
-                    onClick={() =>
-                      navigator.clipboard.writeText(`${INVITE_BASE}/interview/${inviteToken}`)
-                    }
-                    className="shrink-0 rounded bg-blue-600 px-2 py-1 text-xs hover:bg-blue-500"
+                    onClick={() => navigator.clipboard.writeText(`${INVITE_BASE}/interview/${inviteToken}`)}
+                    className="shrink-0 rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium hover:bg-blue-500 transition-all"
                   >
                     Copy
                   </button>
                 </div>
                 <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={handleCreateAnother}
-                    className="flex-1 rounded-lg bg-gray-800 py-2 text-sm hover:bg-gray-700"
-                  >
-                    Create Another
-                  </button>
-                  <button
-                    type="button"
-                    onClick={closeModal}
-                    className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold hover:bg-blue-500"
-                  >
-                    Done
-                  </button>
+                  <button onClick={() => { setInviteToken(null); setModalError(null); setForm(EMPTY_FORM) }} className="btn-ghost flex-1 py-2 text-sm">Create Another</button>
+                  <button onClick={closeModal} className="btn-primary flex-1 py-2 text-sm">Done</button>
                 </div>
               </>
             ) : (
-              /* Form state */
               <>
-                <h2 className="mb-4 text-lg font-bold">New Interview</h2>
+                <h2 className="mb-5 text-lg font-bold">New Interview</h2>
                 <form onSubmit={handleCreate} className="flex flex-col gap-4">
+                  {([
+                    { label: 'Candidate Name', key: 'candidate_name', type: 'text', placeholder: 'Jane Smith' },
+                    { label: 'Candidate Email', key: 'candidate_email', type: 'email', placeholder: 'jane@example.com' },
+                    { label: 'Job Title', key: 'job_title', type: 'text', placeholder: 'Senior Frontend Developer' },
+                  ] as const).map(field => (
+                    <div key={field.key}>
+                      <label className="mb-1.5 block text-sm text-slate-400">{field.label}</label>
+                      <input
+                        type={field.type}
+                        value={form[field.key]}
+                        onChange={e => setForm(f => ({ ...f, [field.key]: e.target.value }))}
+                        required
+                        placeholder={field.placeholder}
+                        className="input-field"
+                      />
+                    </div>
+                  ))}
                   <div>
-                    <label className="mb-1 block text-sm text-gray-400">Candidate Name</label>
-                    <input
-                      type="text"
-                      value={form.candidate_name}
-                      onChange={e => setForm(f => ({ ...f, candidate_name: e.target.value }))}
-                      required
-                      className="w-full rounded-lg bg-gray-800 px-4 py-2 text-white outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm text-gray-400">Candidate Email</label>
-                    <input
-                      type="email"
-                      value={form.candidate_email}
-                      onChange={e => setForm(f => ({ ...f, candidate_email: e.target.value }))}
-                      required
-                      className="w-full rounded-lg bg-gray-800 px-4 py-2 text-white outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm text-gray-400">Job Title</label>
-                    <input
-                      type="text"
-                      value={form.job_title}
-                      onChange={e => setForm(f => ({ ...f, job_title: e.target.value }))}
-                      required
-                      className="w-full rounded-lg bg-gray-800 px-4 py-2 text-white outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm text-gray-400">Question Set</label>
+                    <label className="mb-1.5 block text-sm text-slate-400">Question Set</label>
                     <select
                       value={form.question_set_id}
                       onChange={e => setForm(f => ({ ...f, question_set_id: e.target.value }))}
                       required
-                      className="w-full rounded-lg bg-gray-800 px-4 py-2 text-white outline-none focus:ring-2 focus:ring-blue-500"
+                      className="input-field"
                     >
-                      <option value="">Select…</option>
-                      {questionSets.map(qs => (
-                        <option key={qs.id} value={qs.id}>
-                          {qs.role}
-                        </option>
-                      ))}
+                      <option value="">Select a question set…</option>
+                      {questionSets.map(qs => <option key={qs.id} value={qs.id}>{qs.role}</option>)}
                     </select>
                   </div>
-                  {modalError && <p className="text-sm text-red-400">{modalError}</p>}
-                  <div className="flex gap-3">
-                    <button
-                      type="button"
-                      onClick={closeModal}
-                      className="flex-1 rounded-lg bg-gray-800 py-2 text-sm hover:bg-gray-700"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={submitting}
-                      className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-semibold hover:bg-blue-500 disabled:opacity-50"
-                    >
-                      {submitting ? 'Creating…' : 'Create Invite'}
+                  {modalError && (
+                    <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{modalError}</div>
+                  )}
+                  <div className="flex gap-3 pt-1">
+                    <button type="button" onClick={closeModal} className="btn-ghost flex-1 py-2 text-sm">Cancel</button>
+                    <button type="submit" disabled={submitting} className="btn-primary flex-1 py-2 text-sm">
+                      {submitting ? 'Creating…' : 'Create & Send Invite'}
                     </button>
                   </div>
                 </form>

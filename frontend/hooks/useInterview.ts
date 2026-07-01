@@ -17,6 +17,7 @@ export interface UseInterviewReturn {
   transcript: TranscriptTurn[]
   flags: ProctoringEvent[]
   error: string | null
+  isSpeaking: boolean
   videoRef: React.RefObject<HTMLVideoElement>
   start: () => Promise<void>
   stop: () => void
@@ -26,15 +27,18 @@ export function useInterview(
   sessionToken: string,
   referenceDescriptor: Float32Array | null,
   backendWsUrl: string,
+  preGrantedStream?: MediaStream,
 ): UseInterviewReturn {
   const [status, setStatus] = useState<InterviewStatus>('idle')
   const [transcript, setTranscript] = useState<TranscriptTurn[]>([])
   const [flags, setFlags] = useState<ProctoringEvent[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [isSpeaking, setIsSpeaking] = useState(false)
 
   const captureRef = useRef<InterviewCapture | null>(null)
   const detachRef = useRef<(() => void) | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const speakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const onFlag = useCallback((event: ProctoringEvent) => {
     setFlags(prev => [...prev, event])
@@ -46,6 +50,8 @@ export function useInterview(
     detachRef.current = null
     captureRef.current?.disconnect()
     captureRef.current = null
+    if (speakingTimerRef.current) clearTimeout(speakingTimerRef.current)
+    setIsSpeaking(false)
     setStatus('ended')
   }, [])
 
@@ -54,7 +60,7 @@ export function useInterview(
 
     const videoEl = videoRef.current
     if (!videoEl) {
-      setError('Video element not mounted — attach videoRef to a <video> element before calling start()')
+      setError('Video element not mounted')
       setStatus('error')
       return
     }
@@ -65,16 +71,19 @@ export function useInterview(
     const capture = new InterviewCapture(sessionToken)
     captureRef.current = capture
 
-    // Detect unexpected WS closure during active interview
     capture.onClose(() => {
       setStatus(prev => (prev === 'active' ? 'error' : prev))
-      setError('Connection lost')
+      setError('Connection lost. Please refresh and try again.')
     })
 
     capture.onAudio((base64) => {
-      capture.playAudio(base64).catch((err) =>
-        console.error('[useInterview] playAudio error:', err),
-      )
+      setIsSpeaking(true)
+      if (speakingTimerRef.current) clearTimeout(speakingTimerRef.current)
+      capture.playAudio(base64)
+        .then(() => {
+          speakingTimerRef.current = setTimeout(() => setIsSpeaking(false), 600)
+        })
+        .catch((err) => console.error('[useInterview] playAudio error:', err))
     })
 
     capture.onTranscript((role, text) => {
@@ -86,8 +95,8 @@ export function useInterview(
 
     try {
       await capture.connect(backendWsUrl)
-      await capture.startAudio()
-      await capture.startVideo(videoEl)
+      await capture.startAudio(preGrantedStream)
+      await capture.startVideo(videoEl, preGrantedStream)
       await capture.startFaceDetection(videoEl, onFlag)
 
       if (referenceDescriptor) {
@@ -99,19 +108,18 @@ export function useInterview(
     } catch (err) {
       capture.disconnect()
       captureRef.current = null
-      const message = err instanceof Error ? err.message : String(err)
-      setError(message)
+      setError(err instanceof Error ? err.message : String(err))
       setStatus('error')
     }
-  }, [status, sessionToken, backendWsUrl, referenceDescriptor, onFlag])
+  }, [status, sessionToken, backendWsUrl, referenceDescriptor, preGrantedStream, onFlag])
 
-  // Tear down on unmount (e.g. navigation away mid-interview)
   useEffect(() => {
     return () => {
       detachRef.current?.()
       captureRef.current?.disconnect()
+      if (speakingTimerRef.current) clearTimeout(speakingTimerRef.current)
     }
   }, [])
 
-  return { status, transcript, flags, error, videoRef, start, stop }
+  return { status, transcript, flags, error, isSpeaking, videoRef, start, stop }
 }

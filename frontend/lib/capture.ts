@@ -68,11 +68,16 @@ export class InterviewCapture {
 
   // --- Mic capture ---
 
-  async startAudio(): Promise<void> {
-    this.micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      video: false,
-    })
+  async startAudio(existingStream?: MediaStream): Promise<void> {
+    if (existingStream) {
+      // Reuse the audio track from the pre-granted stream
+      this.micStream = new MediaStream(existingStream.getAudioTracks())
+    } else {
+      this.micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        video: false,
+      })
+    }
     this.audioCtx = new AudioContext({ sampleRate: 16000 })
     await this.audioCtx.audioWorklet.addModule('/pcm-processor.js')
     const source = this.audioCtx.createMediaStreamSource(this.micStream)
@@ -145,11 +150,16 @@ export class InterviewCapture {
 
   // --- Video capture (Task 5) ---
 
-  async startVideo(videoEl: HTMLVideoElement): Promise<void> {
-    this.videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: 'user' },
-      audio: false,
-    })
+  async startVideo(videoEl: HTMLVideoElement, existingStream?: MediaStream): Promise<void> {
+    if (existingStream) {
+      // Reuse the video track from the pre-granted stream
+      this.videoStream = new MediaStream(existingStream.getVideoTracks())
+    } else {
+      this.videoStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' },
+        audio: false,
+      })
+    }
     videoEl.srcObject = this.videoStream
     await videoEl.play()
 

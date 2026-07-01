@@ -4,72 +4,65 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { initFaceApi, generateDescriptor } from '../lib/faceVerify'
 
 interface SelfieCaptureProps {
+  stream: MediaStream
   sessionToken: string
   onCapture: (descriptor: Float32Array) => void
 }
 
-type State =
-  | { phase: 'loading' }
-  | { phase: 'ready' }
-  | { phase: 'processing' }
-  | { phase: 'confirm'; descriptor: Float32Array; snapshotUrl: string }
-  | { phase: 'saving'; descriptor: Float32Array; snapshotUrl: string }
-  | { phase: 'error'; message: string }
+type Phase =
+  | { name: 'loading' }
+  | { name: 'ready' }
+  | { name: 'processing' }
+  | { name: 'confirm'; descriptor: Float32Array; snapshotUrl: string }
+  | { name: 'saving'; descriptor: Float32Array; snapshotUrl: string }
+  | { name: 'error'; message: string }
 
-export default function SelfieCapture({ sessionToken, onCapture }: SelfieCaptureProps) {
-  const [state, setState] = useState<State>({ phase: 'loading' })
+export default function SelfieCapture({ stream, sessionToken, onCapture }: SelfieCaptureProps) {
+  const [phase, setPhase] = useState<Phase>({ name: 'loading' })
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
 
-  // Open camera first (triggers permission prompt), load models in parallel
+  // Attach the pre-granted stream to the video element — do NOT stop tracks
   useEffect(() => {
     let cancelled = false
 
     async function init() {
+      const videoEl = videoRef.current
+      if (!videoEl) return
+      // Use the video track from the provided stream
+      const videoOnlyStream = new MediaStream(stream.getVideoTracks())
+      videoEl.srcObject = videoOnlyStream
       try {
-        // Start both concurrently so permission prompt shows immediately
-        const [stream] = await Promise.all([
-          navigator.mediaDevices.getUserMedia({ video: true, audio: false }),
-          initFaceApi(),
-        ])
-        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
-        streamRef.current = stream
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          await videoRef.current.play()
-        }
-        if (!cancelled) setState({ phase: 'ready' })
+        await videoEl.play()
+        await initFaceApi()
+        if (!cancelled) setPhase({ name: 'ready' })
       } catch (err) {
-        if (!cancelled) setState({ phase: 'error', message: `Setup failed: ${String(err)}` })
+        if (!cancelled) setPhase({ name: 'error', message: `Setup failed: ${String(err)}` })
       }
     }
 
     void init()
-    return () => {
-      cancelled = true
-      streamRef.current?.getTracks().forEach(t => t.stop())
-    }
-  }, [])
+    return () => { cancelled = true }
+    // Stream tracks are NOT stopped here — PermissionCheck owns the stream lifecycle
+  }, [stream])
 
   const takePhoto = useCallback(async () => {
     const videoEl = videoRef.current
     if (!videoEl) return
-    setState({ phase: 'processing' })
+    setPhase({ name: 'processing' })
 
     const result = await generateDescriptor(videoEl)
 
     if (!result.ok) {
       const messages: Record<string, string> = {
-        no_face: 'No face detected — look directly at the camera and try again.',
-        multiple_faces: 'Only one face should be visible — try again.',
-        error: 'Something went wrong — try again.',
+        no_face: 'No face detected. Look directly at the camera in good lighting.',
+        multiple_faces: 'Only one person should be visible — please try again.',
+        error: 'Detection failed — please try again.',
       }
-      setState({ phase: 'error', message: messages[result.reason] ?? result.message })
+      setPhase({ name: 'error', message: messages[result.reason] ?? result.message })
       return
     }
 
-    // Freeze a snapshot from the canvas
     let snapshotUrl = ''
     const canvas = canvasRef.current
     if (canvas && videoEl.videoWidth) {
@@ -78,16 +71,15 @@ export default function SelfieCapture({ sessionToken, onCapture }: SelfieCapture
       canvas.getContext('2d')?.drawImage(videoEl, 0, 0)
       snapshotUrl = canvas.toDataURL('image/jpeg', 0.8)
     }
-
-    setState({ phase: 'confirm', descriptor: result.descriptor, snapshotUrl })
+    setPhase({ name: 'confirm', descriptor: result.descriptor, snapshotUrl })
   }, [])
 
-  const retake = useCallback(() => setState({ phase: 'ready' }), [])
+  const retake = useCallback(() => setPhase({ name: 'ready' }), [])
 
   const confirm = useCallback(async () => {
-    if (state.phase !== 'confirm') return
-    const { descriptor, snapshotUrl } = state
-    setState({ phase: 'saving', descriptor, snapshotUrl })
+    if (phase.name !== 'confirm') return
+    const { descriptor, snapshotUrl } = phase
+    setPhase({ name: 'saving', descriptor, snapshotUrl })
 
     try {
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001'
@@ -96,82 +88,99 @@ export default function SelfieCapture({ sessionToken, onCapture }: SelfieCapture
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ descriptor: Array.from(descriptor) }),
       })
-
       if (res.status === 409 || res.ok) {
-        // 409 = already set (idempotent), treat as success
-        streamRef.current?.getTracks().forEach(t => t.stop())
         onCapture(descriptor)
         return
       }
-
       const body = await res.json().catch(() => ({}))
-      setState({ phase: 'error', message: (body as { error?: string }).error ?? 'Failed to save — try again.' })
+      setPhase({ name: 'error', message: (body as { error?: string }).error ?? 'Failed to save — try again.' })
     } catch (err) {
-      setState({ phase: 'error', message: `Network error: ${String(err)}` })
+      setPhase({ name: 'error', message: `Network error: ${String(err)}` })
     }
-  }, [state, sessionToken, onCapture])
+  }, [phase, sessionToken, onCapture])
+
+  const isShowingVideo = phase.name === 'ready' || phase.name === 'processing' || phase.name === 'loading' || phase.name === 'error'
+  const isShowingSnapshot = phase.name === 'confirm' || phase.name === 'saving'
 
   return (
-    <div className="flex flex-col items-center gap-4 p-6 max-w-md mx-auto">
-      <h2 className="text-xl font-semibold">Identity Verification</h2>
-      <p className="text-sm text-gray-500 text-center">
-        We need a quick selfie to verify your identity during the interview.
-      </p>
+    <div className="flex w-full flex-col items-center gap-4">
+      {/* Video with face-guide oval overlay */}
+      {isShowingVideo && (
+        <div className="relative w-full overflow-hidden rounded-2xl bg-black" style={{ aspectRatio: '4/3' }}>
+          <video
+            ref={videoRef}
+            className="h-full w-full object-cover"
+            muted
+            playsInline
+          />
+          {/* Oval guide overlay */}
+          <svg
+            className="pointer-events-none absolute inset-0 h-full w-full"
+            viewBox="0 0 100 75"
+            preserveAspectRatio="none"
+          >
+            <defs>
+              <mask id="oval-cutout">
+                <rect width="100" height="75" fill="white" />
+                <ellipse cx="50" cy="37" rx="30" ry="33" fill="black" />
+              </mask>
+            </defs>
+            <rect width="100" height="75" fill="rgba(0,0,0,0.55)" mask="url(#oval-cutout)" />
+            <ellipse
+              cx="50" cy="37" rx="30" ry="33"
+              fill="none"
+              stroke={phase.name === 'ready' ? 'rgba(59,130,246,0.85)' : 'rgba(255,255,255,0.3)'}
+              strokeWidth="0.5"
+            />
+          </svg>
 
-      {/* Video preview — hidden when showing snapshot */}
-      <video
-        ref={videoRef}
-        className={`w-full rounded-lg bg-gray-900 ${state.phase === 'confirm' || state.phase === 'saving' ? 'hidden' : ''}`}
-        muted
-        playsInline
-      />
-
-      {/* Frozen snapshot in confirm/saving states */}
-      {(state.phase === 'confirm' || state.phase === 'saving') && state.snapshotUrl && (
-        <img src={state.snapshotUrl} alt="Your selfie" className="w-full rounded-lg" />
+          {/* Status text overlay */}
+          <div className="absolute bottom-3 left-0 right-0 flex justify-center">
+            <span className="rounded-full bg-black/60 px-3 py-1 text-xs text-slate-300 backdrop-blur-sm">
+              {phase.name === 'loading' && 'Loading face detection…'}
+              {phase.name === 'ready' && 'Position your face in the oval'}
+              {phase.name === 'processing' && 'Detecting face…'}
+              {phase.name === 'error' && 'Try again'}
+            </span>
+          </div>
+        </div>
       )}
 
-      {/* Hidden canvas used to grab snapshot */}
+      {/* Snapshot preview */}
+      {isShowingSnapshot && (phase.name === 'confirm' || phase.name === 'saving') && phase.snapshotUrl && (
+        <div className="relative w-full overflow-hidden rounded-2xl" style={{ aspectRatio: '4/3' }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={phase.snapshotUrl} alt="Your selfie" className="h-full w-full object-cover" />
+          {phase.name === 'saving' && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-white/20 border-t-white" />
+            </div>
+          )}
+        </div>
+      )}
+
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Status messages */}
-      {state.phase === 'loading' && (
-        <p className="text-sm text-gray-400">Loading face detection models…</p>
-      )}
-      {state.phase === 'processing' && (
-        <p className="text-sm text-gray-400">Detecting face…</p>
-      )}
-      {state.phase === 'saving' && (
-        <p className="text-sm text-gray-400">Saving…</p>
-      )}
-      {state.phase === 'error' && (
-        <p className="text-sm text-red-500 text-center">{state.message}</p>
+      {/* Error message */}
+      {phase.name === 'error' && (
+        <p className="text-center text-sm text-red-400">{phase.message}</p>
       )}
 
-      {/* Actions */}
-      <div className="flex gap-3 w-full">
-        {(state.phase === 'ready' || state.phase === 'error') && (
+      {/* Action buttons */}
+      <div className="flex w-full gap-3">
+        {(phase.name === 'ready' || phase.name === 'error') && (
           <button
-            onClick={state.phase === 'error' ? retake : takePhoto}
-            className="flex-1 py-2 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+            onClick={phase.name === 'error' ? retake : takePhoto}
+            className="btn-primary flex-1"
           >
-            {state.phase === 'error' ? 'Retake' : 'Take Photo'}
+            {phase.name === 'error' ? 'Try Again' : 'Capture Photo'}
           </button>
         )}
-        {state.phase === 'confirm' && (
+
+        {phase.name === 'confirm' && (
           <>
-            <button
-              onClick={retake}
-              className="flex-1 py-2 px-4 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
-            >
-              Retake
-            </button>
-            <button
-              onClick={confirm}
-              className="flex-1 py-2 px-4 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700"
-            >
-              Looks good — Continue
-            </button>
+            <button onClick={retake} className="btn-ghost flex-1">Retake</button>
+            <button onClick={confirm} className="btn-primary flex-1">Looks good →</button>
           </>
         )}
       </div>

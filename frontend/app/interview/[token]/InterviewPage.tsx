@@ -6,9 +6,10 @@ import { PreflightScreen } from '../../../components/interview/PreflightScreen'
 import { InterviewRoom } from '../../../components/interview/InterviewRoom'
 import { CompletedScreen } from '../../../components/interview/CompletedScreen'
 
-type Phase = 'loading' | 'preflight' | 'interview' | 'completed' | 'error'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001'
+const WS_URL = BACKEND_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:3001'
+type Phase = 'loading' | 'preflight' | 'interview' | 'completed' | 'error'
 
 interface SessionDetails {
   candidateName: string
@@ -23,22 +24,23 @@ export function InterviewPage({ token }: InterviewPageProps) {
   const [phase, setPhase] = useState<Phase>('loading')
   const [session, setSession] = useState<SessionDetails | null>(null)
   const [descriptor, setDescriptor] = useState<Float32Array | null>(null)
+  const [stream, setStream] = useState<MediaStream | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
-  const { status, transcript, flags, error, videoRef, start, stop } = useInterview(
+  const { status, transcript, flags, error, isSpeaking, videoRef, start, stop } = useInterview(
     token,
     descriptor,
     WS_URL,
+    stream ?? undefined,
   )
 
-  // Fetch session details on mount — validates token before showing selfie screen
+  // Validate token and fetch session details on mount
   useEffect(() => {
-    const REST_BASE = WS_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
-    fetch(`${REST_BASE}/candidate/sessions/${token}`)
+    fetch(`${BACKEND_URL}/candidate/sessions/${token}`)
       .then(res => {
-        if (res.status === 404) throw new Error('Session not found')
-        if (res.status === 410) throw new Error('This interview link has expired or was already used')
-        if (!res.ok) throw new Error('Failed to load session')
+        if (res.status === 404) throw new Error('Session not found or invalid link.')
+        if (res.status === 410) throw new Error('This interview link has expired or was already used. Please contact your recruiter.')
+        if (!res.ok) throw new Error('Failed to load session.')
         return res.json() as Promise<SessionDetails>
       })
       .then(data => {
@@ -67,33 +69,35 @@ export function InterviewPage({ token }: InterviewPageProps) {
   // Called AFTER render so videoRef.current is non-null.
   useEffect(() => {
     if (phase === 'interview' && status === 'idle') {
-      start()
+      void start()
     }
   }, [phase, status, start])
 
-  // Loading spinner
   if (phase === 'loading') {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-gray-700 border-t-blue-500" />
+      <div className="flex min-h-screen items-center justify-center bg-navy-950">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/10 border-t-blue-500" />
+          <p className="text-sm text-slate-500">Loading your interview…</p>
+        </div>
       </div>
     )
   }
 
-  // Selfie + begin
   if (phase === 'preflight' && session) {
     return (
       <PreflightScreen
         token={token}
         session={session}
+        stream={stream}
         descriptor={descriptor}
+        onStreamGranted={setStream}
         onCapture={setDescriptor}
         onBegin={() => setPhase('interview')}
       />
     )
   }
 
-  // Live interview
   if (phase === 'interview') {
     return (
       <InterviewRoom
@@ -102,17 +106,16 @@ export function InterviewPage({ token }: InterviewPageProps) {
         transcript={transcript}
         flags={flags}
         error={error}
+        isSpeaking={isSpeaking}
         videoRef={videoRef}
         onStop={stop}
       />
     )
   }
 
-  // Interview ended cleanly
   if (phase === 'completed') {
     return <CompletedScreen variant="success" session={session} />
   }
 
-  // Error at any phase
   return <CompletedScreen variant="error" session={session} message={errorMessage ?? undefined} />
 }

@@ -107,13 +107,14 @@ export const supabaseService = {
     if (error) console.error('[DB] saveFlag error:', error)
   },
 
-  async finalizeSession(sessionId: string, recommendation: string, _summary: string) {
+  async finalizeSession(sessionId: string, recommendation: string, summary: string) {
     const { error } = await getClient()
       .from('sessions')
       .update({
         status: 'completed',
         ended_at: new Date().toISOString(),
         recommendation,
+        summary,
       })
       .eq('id', sessionId)
     if (error) console.error('[DB] finalizeSession error:', error)
@@ -203,3 +204,5 @@ export const supabaseService = {
     return { id: user.id }
   },
 }
+
+export { getClient as getSupabaseClient }

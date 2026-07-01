@@ -4,87 +4,49 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '../../AuthContext'
 
-const REST_BASE = process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:3001'
+const REST_BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001'
 
 interface SessionRow {
-  id: string
-  candidate_name: string
-  job_title: string
-  status: string
-  overall_score: number | null
-  recommendation: string | null
-  created_at: string
-  started_at: string | null
-  ended_at: string | null
+  id: string; candidate_name: string; job_title: string; status: string
+  overall_score: number | null; suspicion_score: number | null
+  recommendation: string | null; summary: string | null
+  created_at: string; started_at: string | null; ended_at: string | null
+}
+interface Turn { id: string; role: string; text: string; score: number | null; ts: string }
+interface Flag { id: string; flag_type: string; severity: 'low' | 'medium' | 'high'; ts: string }
+interface Detail { session: SessionRow; turns: Turn[]; flags: Flag[] }
+
+const STATUS_STYLES: Record<string, string> = {
+  pending: 'bg-slate-500/10 border-slate-500/20 text-slate-400',
+  in_progress: 'bg-blue-500/10 border-blue-500/20 text-blue-400',
+  completed: 'bg-green-500/10 border-green-500/20 text-green-400',
+  cancelled: 'bg-red-500/10 border-red-500/20 text-red-400',
+}
+const SEVERITY_STYLES: Record<string, string> = {
+  low: 'bg-slate-500/10 border-slate-500/20 text-slate-400',
+  medium: 'bg-amber-500/10 border-amber-500/20 text-amber-400',
+  high: 'bg-red-500/10 border-red-500/20 text-red-400',
 }
 
-interface Turn {
-  id: string
-  role: string
-  text: string
-  score: number | null
-  ts: string
+function fmt(iso: string) {
+  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
-
-interface Flag {
-  id: string
-  flag_type: string
-  severity: 'low' | 'medium' | 'high'
-  ts: string
-}
-
-interface Detail {
-  session: SessionRow
-  turns: Turn[]
-  flags: Flag[]
-}
-
-const STATUS_BADGE: Record<string, string> = {
-  pending: 'bg-gray-700 text-gray-300',
-  in_progress: 'bg-blue-900 text-blue-300',
-  completed: 'bg-green-900 text-green-300',
-  cancelled: 'bg-red-900 text-red-300',
-}
-
-const SEVERITY_BADGE: Record<string, string> = {
-  low: 'bg-gray-700 text-gray-300',
-  medium: 'bg-amber-900 text-amber-300',
-  high: 'bg-red-900 text-red-300',
-}
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
-}
-
-function suspicionColor(count: number): string {
-  if (count < 3) return 'text-green-400'
-  if (count < 7) return 'text-amber-400'
-  return 'text-red-400'
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 function RecommendationBadge({ value }: { value: string | null }) {
-  if (!value) return <span className="text-gray-500">—</span>
-  const map: Record<string, { label: string; cls: string }> = {
-    hire: { label: '✓ Hire', cls: 'text-green-400' },
-    reject: { label: '✗ Reject', cls: 'text-red-400' },
-    review: { label: '○ Review', cls: 'text-amber-400' },
-  }
-  const entry = map[value.toLowerCase()]
-  if (!entry) return <span>{value}</span>
-  return <span className={`font-semibold ${entry.cls}`}>{entry.label}</span>
+  if (!value) return <span className="text-slate-600">—</span>
+  const v = value.toLowerCase()
+  if (v.includes('strong hire') || v === 'hire') return <span className="font-semibold text-green-400">✓ {value}</span>
+  if (v.includes('no hire') || v === 'reject') return <span className="font-semibold text-red-400">✗ {value}</span>
+  return <span className="font-semibold text-amber-400">○ {value}</span>
+}
+
+function ScoreRing({ score, max = 10 }: { score: number | null; max?: number }) {
+  if (score == null) return <span className="text-3xl font-bold text-slate-600">—</span>
+  const color = score >= 7 ? 'text-green-400' : score >= 4 ? 'text-amber-400' : 'text-red-400'
+  return <span className={`text-3xl font-bold ${color}`}>{score}/{max}</span>
 }
 
 export default function SessionDetailPage({ params }: { params: { id: string } }) {
@@ -99,161 +61,156 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
       headers: { Authorization: `Bearer ${accessToken}` },
     })
       .then(async r => {
-        if (r.status === 404) {
-          setNotFound(true)
-          return
-        }
-        const data = (await r.json()) as Detail
-        setDetail(data)
+        if (r.status === 404) { setNotFound(true); return }
+        setDetail((await r.json()) as Detail)
       })
       .catch(() => setNotFound(true))
   }, [accessToken, params.id])
 
   if (notFound) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <p className="text-gray-400">Session not found.</p>
+      <div className="flex min-h-screen items-center justify-center bg-navy-950">
+        <div className="glass-card p-8 text-center">
+          <p className="text-slate-400">Session not found.</p>
+          <button onClick={() => router.push('/hr')} className="btn-ghost mt-4 py-2 text-sm">← Back</button>
+        </div>
       </div>
     )
   }
 
   if (!detail) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-gray-700 border-t-blue-500" />
+      <div className="flex min-h-screen items-center justify-center bg-navy-950">
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/10 border-t-blue-500" />
       </div>
     )
   }
 
   const { session, turns, flags } = detail
+  const displayTurns = turns.filter(t => !t.text.startsWith('[Score:'))
 
   return (
-    <div className="min-h-screen bg-gray-950 p-6 text-white">
-      {/* Back */}
-      <button
-        type="button"
-        onClick={() => router.push('/hr')}
-        className="mb-6 text-sm text-gray-400 hover:text-white"
-      >
-        ← Back to Sessions
-      </button>
-
-      {/* Header */}
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">{session.candidate_name}</h1>
-          <p className="mt-1 text-gray-400">{session.job_title}</p>
+    <div className="min-h-screen bg-navy-950 text-white">
+      <header className="border-b border-white/8 px-6 py-4">
+        <div className="mx-auto max-w-5xl">
+          <button onClick={() => router.push('/hr')} className="mb-4 flex items-center gap-1.5 text-sm text-slate-500 hover:text-white transition-colors">
+            ← Back to Sessions
+          </button>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">{session.candidate_name}</h1>
+              <p className="mt-0.5 text-slate-400">{session.job_title}</p>
+            </div>
+            <div className="flex flex-col items-end gap-1.5">
+              <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${STATUS_STYLES[session.status] ?? STATUS_STYLES.pending}`}>
+                {session.status.replace(/_/g, ' ')}
+              </span>
+              <span className="text-xs text-slate-600">
+                {fmt(session.created_at)}
+                {session.ended_at ? ` → ${fmt(session.ended_at)}` : ''}
+              </span>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col items-end gap-1">
-          <span
-            className={`rounded-full px-3 py-1 text-xs font-medium ${STATUS_BADGE[session.status] ?? 'bg-gray-700 text-gray-300'}`}
-          >
-            {session.status.replace(/_/g, ' ')}
-          </span>
-          <span className="text-xs text-gray-500">
-            Created {formatDateTime(session.created_at)}
-            {session.ended_at ? ` · Ended ${formatDateTime(session.ended_at)}` : ''}
-          </span>
-        </div>
-      </div>
+      </header>
 
-      {/* Score cards */}
-      <div className="mb-8 grid grid-cols-3 gap-4">
-        <div className="rounded-xl bg-gray-900 p-4">
-          <p className="mb-1 text-xs text-gray-400">Overall Score</p>
-          <p className="text-2xl font-bold">
-            {session.overall_score != null ? `${session.overall_score}/10` : '—'}
-          </p>
+      <main className="mx-auto max-w-5xl px-6 py-8 space-y-8">
+        {/* Score cards */}
+        <div className="grid grid-cols-3 gap-4">
+          <div className="glass-card p-5">
+            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Overall Score</p>
+            <ScoreRing score={session.overall_score} />
+          </div>
+          <div className="glass-card p-5">
+            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Suspicion Score</p>
+            <span className={`text-3xl font-bold ${
+              (session.suspicion_score ?? 0) < 20 ? 'text-green-400'
+              : (session.suspicion_score ?? 0) < 50 ? 'text-amber-400'
+              : 'text-red-400'
+            }`}>
+              {session.suspicion_score ?? 0}
+            </span>
+            <span className="text-slate-600">/100</span>
+          </div>
+          <div className="glass-card p-5">
+            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Recommendation</p>
+            <div className="text-xl font-bold mt-1"><RecommendationBadge value={session.recommendation} /></div>
+          </div>
         </div>
-        <div className="rounded-xl bg-gray-900 p-4">
-          <p className="mb-1 text-xs text-gray-400">Proctoring Flags</p>
-          <p className={`text-2xl font-bold ${suspicionColor(flags.length)}`}>{flags.length}</p>
-        </div>
-        <div className="rounded-xl bg-gray-900 p-4">
-          <p className="mb-1 text-xs text-gray-400">Recommendation</p>
-          <p className="text-2xl font-bold">
-            <RecommendationBadge value={session.recommendation} />
-          </p>
-        </div>
-      </div>
 
-      {/* Transcript */}
-      <section className="mb-8">
-        <h2 className="mb-4 text-lg font-semibold">Transcript</h2>
-        {turns.length === 0 ? (
-          <p className="text-gray-500">No transcript recorded.</p>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {turns.map(turn => {
-              const isScoreNote = turn.text.startsWith('[Score:')
-              const isInterviewer = turn.role === 'model'
-
-              if (isScoreNote) {
-                return (
-                  <div key={turn.id} className="pl-4 border-l border-gray-800">
-                    <p className="text-xs italic text-gray-500">{turn.text}</p>
-                  </div>
-                )
-              }
-
-              return (
-                <div key={turn.id}>
-                  <div className="flex items-baseline gap-2">
-                    <span
-                      className={`text-xs font-semibold ${isInterviewer ? 'text-blue-400' : 'text-gray-400'}`}
-                    >
-                      {isInterviewer ? 'Interviewer' : 'Candidate'}
-                    </span>
-                    {!isInterviewer && turn.score != null && (
-                      <span className="text-xs text-green-400">{turn.score}/10</span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 text-sm text-gray-200">{turn.text}</p>
-                </div>
-              )
-            })}
+        {/* Summary */}
+        {session.summary && (
+          <div className="glass-card p-5">
+            <p className="mb-2 text-xs font-medium text-slate-500 uppercase tracking-wide">AI Summary</p>
+            <p className="text-sm text-slate-300 leading-relaxed">{session.summary}</p>
           </div>
         )}
-      </section>
 
-      {/* Proctoring Flags */}
-      <section>
-        <h2 className="mb-4 text-lg font-semibold">Proctoring Flags</h2>
-        {flags.length === 0 ? (
-          <p className="text-gray-500">No proctoring flags recorded.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-gray-800">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800 bg-gray-900 text-left text-gray-400">
-                  <th className="px-4 py-3">Time</th>
-                  <th className="px-4 py-3">Event</th>
-                  <th className="px-4 py-3">Severity</th>
-                </tr>
-              </thead>
-              <tbody>
-                {flags.map(flag => (
-                  <tr key={flag.id} className="border-b border-gray-800">
-                    <td className="px-4 py-2 font-mono text-xs text-gray-400">
-                      {formatTime(flag.ts)}
-                    </td>
-                    <td className="px-4 py-2 capitalize">
-                      {flag.flag_type.replace(/_/g, ' ')}
-                    </td>
-                    <td className="px-4 py-2">
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_BADGE[flag.severity] ?? 'bg-gray-700 text-gray-300'}`}
-                      >
-                        {flag.severity}
+        {/* Transcript */}
+        <section>
+          <h2 className="mb-4 font-semibold">Transcript</h2>
+          {displayTurns.length === 0 ? (
+            <p className="text-sm text-slate-600">No transcript recorded.</p>
+          ) : (
+            <div className="glass-card p-5 space-y-4 max-h-[500px] overflow-y-auto">
+              {displayTurns.map(turn => (
+                <div key={turn.id} className={`flex ${turn.role === 'model' ? 'justify-start' : 'justify-end'}`}>
+                  <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                    turn.role === 'model'
+                      ? 'rounded-tl-sm bg-white/[0.05] border border-white/8 text-slate-200'
+                      : 'rounded-tr-sm bg-blue-600/20 border border-blue-500/20 text-blue-100'
+                  }`}>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className={`text-xs font-semibold ${turn.role === 'model' ? 'text-blue-400' : 'text-blue-300'}`}>
+                        {turn.role === 'model' ? 'Interviewer' : 'Candidate'}
                       </span>
-                    </td>
+                      {turn.role === 'user' && turn.score != null && (
+                        <span className="text-xs text-green-400 font-medium">{turn.score}/10</span>
+                      )}
+                    </div>
+                    <p className="mt-1">{turn.text}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Proctoring Flags */}
+        <section>
+          <h2 className="mb-4 font-semibold">Proctoring Flags <span className="text-slate-600 font-normal text-sm">({flags.length})</span></h2>
+          {flags.length === 0 ? (
+            <div className="glass-card p-5">
+              <p className="text-sm text-green-400">✓ No proctoring flags recorded.</p>
+            </div>
+          ) : (
+            <div className="glass-card overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/8 text-left">
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Time</th>
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Event</th>
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Severity</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                </thead>
+                <tbody>
+                  {flags.map(flag => (
+                    <tr key={flag.id} className="border-b border-white/5">
+                      <td className="px-5 py-3 font-mono text-xs text-slate-500">{fmtTime(flag.ts)}</td>
+                      <td className="px-5 py-3 capitalize text-slate-300">{flag.flag_type.replace(/_/g, ' ')}</td>
+                      <td className="px-5 py-3">
+                        <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${SEVERITY_STYLES[flag.severity] ?? SEVERITY_STYLES.low}`}>
+                          {flag.severity}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </main>
     </div>
   )
 }
