@@ -51,7 +51,7 @@ router.get('/sessions/:token', async (req: Request, res: Response) => {
 
   res.json({
     candidateName: session.candidate_name,
-    role: session.question_set.role,
+    role: session.job_role ?? session.question_set?.role ?? '',
   })
 })
 

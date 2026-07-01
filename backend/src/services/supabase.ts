@@ -1,8 +1,8 @@
+// backend/src/services/supabase.ts
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
-import type { QuestionSet } from '../agents/interviewer'
+import type { QuestionSet, FinalizeResult } from '../agents/interviewer'
 
-// Lazy-initialised so the server boots even when SUPABASE_URL is not yet set.
 let _supabase: SupabaseClient | null = null
 function getClient(): SupabaseClient {
   if (!_supabase) {
@@ -45,7 +45,16 @@ export const supabaseService = {
       status: data.status as string,
       expires_at: data.expires_at as string,
       candidate_name: data.candidate_name as string,
-      question_set: data.question_sets as unknown as QuestionSet,
+      question_set: data.question_sets as unknown as QuestionSet | null,
+      use_question_set: (data.use_question_set ?? true) as boolean,
+      job_role: (data.job_role ?? '') as string,
+      experience_years: (data.experience_years ?? 'Fresher') as string,
+      jd_text: data.jd_text as string | null,
+      jd_file_uri: data.jd_file_uri as string | null,
+      resume_text: data.resume_text as string | null,
+      resume_file_uri: data.resume_file_uri as string | null,
+      linkedin_url: data.linkedin_url as string | null,
+      custom_instructions: data.custom_instructions as string | null,
     }
   },
 
@@ -57,38 +66,15 @@ export const supabaseService = {
     if (error) console.error('[DB] markSessionStarted error:', error)
   },
 
-  async saveScore(sessionId: string, questionId: string, score: number, notes: string) {
-    const supabase = getClient()
-
-    // Fetch the most-recent unscored candidate turn for this session
-    const { data: turns, error: fetchErr } = await supabase
-      .from('transcript_turns')
-      .select('id')
-      .eq('session_id', sessionId)
-      .eq('role', 'user')
-      .is('question_id', null)
-      .order('ts', { ascending: false })
-      .limit(1)
-
-    if (fetchErr) {
-      console.error('[DB] saveScore fetch error:', fetchErr)
-    } else if (turns && turns.length > 0) {
-      const { error: updateErr } = await supabase
-        .from('transcript_turns')
-        .update({ score, question_id: questionId })
-        .eq('id', turns[0].id)
-      if (updateErr) console.error('[DB] saveScore update error:', updateErr)
-    }
-
-    // Insert a scorer notes record
-    const { error: insertErr } = await supabase.from('transcript_turns').insert({
+  async saveScore(sessionId: string, area: string, score: number, notes: string) {
+    const { error } = await getClient().from('transcript_turns').insert({
       session_id: sessionId,
       role: 'model',
-      text: `[Score: ${score}/10] ${notes}`,
-      question_id: questionId,
+      text: `[Competency: ${area} | Score: ${score}/5] ${notes}`,
+      question_id: area,
       score,
     })
-    if (insertErr) console.error('[DB] saveScore insert error:', insertErr)
+    if (error) console.error('[DB] saveScore error:', error)
   },
 
   async saveTranscriptTurn(sessionId: string, role: string, text: string) {
@@ -107,14 +93,19 @@ export const supabaseService = {
     if (error) console.error('[DB] saveFlag error:', error)
   },
 
-  async finalizeSession(sessionId: string, recommendation: string, summary: string) {
+  async finalizeSession(sessionId: string, result: FinalizeResult) {
     const { error } = await getClient()
       .from('sessions')
       .update({
         status: 'completed',
         ended_at: new Date().toISOString(),
-        recommendation,
-        summary,
+        recommendation: result.recommendation,
+        summary: result.summary,
+        competency_ratings: result.competency_ratings,
+        verified_strengths: result.verified_strengths,
+        gaps: result.gaps,
+        notable_signals: result.notable_signals ?? null,
+        followup_areas: result.followup_areas ?? null,
       })
       .eq('id', sessionId)
     if (error) console.error('[DB] finalizeSession error:', error)
@@ -126,7 +117,16 @@ export const supabaseService = {
     candidate_name: string
     candidate_email: string
     job_title: string
-    question_set_id: string
+    job_role: string
+    experience_years: string
+    question_set_id?: string
+    use_question_set: boolean
+    jd_text?: string
+    jd_file_uri?: string
+    resume_text?: string
+    resume_file_uri?: string
+    linkedin_url?: string
+    custom_instructions?: string
   }) {
     const token = crypto.randomBytes(32).toString('hex')
     const { data, error } = await getClient()

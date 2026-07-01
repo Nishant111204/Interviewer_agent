@@ -1,3 +1,4 @@
+// backend/src/websocket/interviewRelay.ts
 import WebSocket from 'ws'
 import {
   GoogleGenAI,
@@ -6,8 +7,14 @@ import {
   type LiveServerMessage,
   type FunctionCall,
   type Session,
+  type Part,
 } from '@google/genai'
-import { buildSystemPrompt, interviewerTools, executeTool } from '../agents/interviewer'
+import {
+  buildSystemPromptText,
+  interviewerTools,
+  executeTool,
+  type InterviewContext,
+} from '../agents/interviewer'
 import { supabaseService } from '../services/supabase'
 import { generateReport } from '../services/report'
 
@@ -43,6 +50,24 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
     return
   }
 
+  const ctx: InterviewContext = {
+    candidateName: session.candidate_name,
+    jobRole: session.job_role || 'the role',
+    experienceYears: session.experience_years || 'Fresher',
+    jdText: session.jd_text ?? undefined,
+    jdFileUri: session.jd_file_uri ?? undefined,
+    resumeText: session.resume_text ?? undefined,
+    resumeFileUri: session.resume_file_uri ?? undefined,
+    linkedinUrl: session.linkedin_url ?? undefined,
+    customInstructions: session.custom_instructions ?? undefined,
+    useQuestionSet: session.use_question_set,
+    questionSet: session.use_question_set && session.question_set ? session.question_set : undefined,
+  }
+
+  const systemParts: Part[] = [{ text: buildSystemPromptText(ctx) }]
+  if (ctx.jdFileUri) systemParts.push({ fileData: { mimeType: 'application/pdf', fileUri: ctx.jdFileUri } })
+  if (ctx.resumeFileUri) systemParts.push({ fileData: { mimeType: 'application/pdf', fileUri: ctx.resumeFileUri } })
+
   const ai = new GoogleGenAI({ apiKey })
   let liveSession: Session | null = null
   let sessionClosed = false
@@ -52,9 +77,7 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
     model: 'gemini-2.0-flash-exp',
     config: {
       responseModalities: [Modality.AUDIO],
-      systemInstruction: {
-        parts: [{ text: buildSystemPrompt(session.question_set, session.candidate_name) }],
-      },
+      systemInstruction: { parts: systemParts },
       tools: [{ functionDeclarations: interviewerTools }],
     },
     callbacks: {
@@ -81,7 +104,6 @@ export async function handleInterviewSocket(ws: WebSocket, token: string) {
     .then((ls) => {
       liveSession = ls
       console.log('[WS] Sending initial greeting trigger, session=', session.id)
-      // Kick off the greeting — Gemini Live waits for input before speaking
       try {
         ls.sendClientContent({
           turns: [{ role: 'user', parts: [{ text: 'Hello, I am ready to begin.' }] }],

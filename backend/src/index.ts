@@ -11,7 +11,6 @@ import questionSetsRouter from './routes/questionSets'
 
 const app = express()
 app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:3000' }))
-app.use(express.json())
 
 // Health check
 app.get('/health', (_req, res) => res.json({ ok: true }))
@@ -20,10 +19,10 @@ app.get('/health', (_req, res) => res.json({ ok: true }))
 app.use('/api/sessions', sessionsRouter)
 
 // REST routes — candidate (token-based auth, no JWT)
-app.use('/candidate', candidateRouter)
+app.use('/candidate', express.json(), candidateRouter)
 
 // REST routes — question sets (JWT-protected)
-app.use('/api/question-sets', questionSetsRouter)
+app.use('/api/question-sets', express.json(), questionSetsRouter)
 
 const server = createServer(app)
 const wss = new WebSocketServer({ noServer: true })
